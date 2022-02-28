@@ -87,12 +87,12 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
         createIndex("test");
         indexRandom(
             true,
-            client().prepareIndex("test", "type", "1").setSource("field", "value"),
-            client().prepareIndex("test", "type", "2").setSource("field", "value"),
-            client().prepareIndex("test", "type", "3").setSource("field", "value"),
-            client().prepareIndex("test", "type", "4").setSource("field", "value"),
-            client().prepareIndex("test", "type", "5").setSource("field", "value"),
-            client().prepareIndex("test", "type", "6").setSource("field", "value")
+            client().prepareIndex("test").setId("1").setSource("field", "value"),
+            client().prepareIndex("test").setId("2").setSource("field", "value"),
+            client().prepareIndex("test").setId("3").setSource("field", "value"),
+            client().prepareIndex("test").setId("4").setSource("field", "value"),
+            client().prepareIndex("test").setId("5").setSource("field", "value"),
+            client().prepareIndex("test").setId("6").setSource("field", "value")
         );
 
         int iters = scaledRandomIntBetween(10, 20);
@@ -136,10 +136,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
             )
             .get();
 
-        client().prepareIndex("test", "type1", "1")
-            .setSource("from", "192.168.0.5", "to", "192.168.0.10")
-            .setRefreshPolicy(IMMEDIATE)
-            .get();
+        client().prepareIndex("test").setId("1").setSource("from", "192.168.0.5", "to", "192.168.0.10").setRefreshPolicy(IMMEDIATE).get();
 
         SearchResponse search = client().prepareSearch()
             .setQuery(boolQuery().must(rangeQuery("from").lte("192.168.0.7")).must(rangeQuery("to").gte("192.168.0.7")))
@@ -170,11 +167,11 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
             .get();
         ensureGreen();
 
-        client().prepareIndex("test", "type1", "1").setSource("ip", "192.168.0.1").get();
-        client().prepareIndex("test", "type1", "2").setSource("ip", "192.168.0.2").get();
-        client().prepareIndex("test", "type1", "3").setSource("ip", "192.168.0.3").get();
-        client().prepareIndex("test", "type1", "4").setSource("ip", "192.168.1.4").get();
-        client().prepareIndex("test", "type1", "5").setSource("ip", "2001:db8::ff00:42:8329").get();
+        client().prepareIndex("test").setId("1").setSource("ip", "192.168.0.1").get();
+        client().prepareIndex("test").setId("2").setSource("ip", "192.168.0.2").get();
+        client().prepareIndex("test").setId("3").setSource("ip", "192.168.0.3").get();
+        client().prepareIndex("test").setId("4").setSource("ip", "192.168.1.4").get();
+        client().prepareIndex("test").setId("5").setSource("ip", "2001:db8::ff00:42:8329").get();
         refresh();
 
         SearchResponse search = client().prepareSearch().setQuery(boolQuery().must(QueryBuilders.termQuery("ip", "192.168.0.1"))).get();
@@ -217,7 +214,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
     public void testSimpleId() {
         createIndex("test");
 
-        client().prepareIndex("test", "type", "XXX1").setSource("field", "value").setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("XXX1").setSource("field", "value").setRefreshPolicy(IMMEDIATE).get();
         // id is not indexed, but lets see that we automatically convert to
         SearchResponse searchResponse = client().prepareSearch().setQuery(QueryBuilders.termQuery("_id", "XXX1")).get();
         assertHitCount(searchResponse, 1L);
@@ -228,8 +225,8 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testSimpleDateRange() throws Exception {
         createIndex("test");
-        client().prepareIndex("test", "type1", "1").setSource("field", "2010-01-05T02:00").get();
-        client().prepareIndex("test", "type1", "2").setSource("field", "2010-01-06T02:00").get();
+        client().prepareIndex("test").setId("1").setSource("field", "2010-01-05T02:00").get();
+        client().prepareIndex("test").setId("2").setSource("field", "2010-01-06T02:00").get();
         ensureGreen();
         refresh();
         SearchResponse searchResponse = client().prepareSearch("test")
@@ -270,7 +267,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
         for (int i = 1; i <= max; i++) {
             String id = String.valueOf(i);
-            docbuilders.add(client().prepareIndex("test", "type1", id).setSource("field", i));
+            docbuilders.add(client().prepareIndex("test").setId(id).setSource("field", i));
         }
 
         indexRandom(true, docbuilders);
@@ -306,7 +303,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
         for (int i = max - 1; i >= 0; i--) {
             String id = String.valueOf(i);
-            docbuilders.add(client().prepareIndex("test", "type1", id).setSource("rank", i));
+            docbuilders.add(client().prepareIndex("test").setId(id).setSource("rank", i));
         }
 
         indexRandom(true, docbuilders);
@@ -330,7 +327,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testInsaneFromAndSize() throws Exception {
         createIndex("idx");
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertWindowFails(client().prepareSearch("idx").setFrom(Integer.MAX_VALUE));
         assertWindowFails(client().prepareSearch("idx").setSize(Integer.MAX_VALUE));
@@ -338,7 +335,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testTooLargeFromAndSize() throws Exception {
         createIndex("idx");
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertWindowFails(client().prepareSearch("idx").setFrom(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY)));
         assertWindowFails(client().prepareSearch("idx").setSize(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) + 1));
@@ -351,7 +348,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testLargeFromAndSizeSucceeds() throws Exception {
         createIndex("idx");
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(client().prepareSearch("idx").setFrom(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) - 10).get(), 1);
         assertHitCount(client().prepareSearch("idx").setSize(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY)).get(), 1);
@@ -369,7 +366,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
             Settings.builder()
                 .put(IndexSettings.MAX_RESULT_WINDOW_SETTING.getKey(), IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) * 2)
         ).get();
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(client().prepareSearch("idx").setFrom(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY)).get(), 1);
         assertHitCount(client().prepareSearch("idx").setSize(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) + 1).get(), 1);
@@ -397,7 +394,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
                 )
                 .get()
         );
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(client().prepareSearch("idx").setFrom(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY)).get(), 1);
         assertHitCount(client().prepareSearch("idx").setSize(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) + 1).get(), 1);
@@ -412,7 +409,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testTooLargeFromAndSizeBackwardsCompatibilityRecommendation() throws Exception {
         prepareCreate("idx").setSettings(Settings.builder().put(IndexSettings.MAX_RESULT_WINDOW_SETTING.getKey(), Integer.MAX_VALUE)).get();
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(client().prepareSearch("idx").setFrom(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) * 10).get(), 1);
         assertHitCount(client().prepareSearch("idx").setSize(IndexSettings.MAX_RESULT_WINDOW_SETTING.get(Settings.EMPTY) * 10).get(), 1);
@@ -427,7 +424,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testTooLargeRescoreWindow() throws Exception {
         createIndex("idx");
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertRescoreWindowFails(Integer.MAX_VALUE);
         assertRescoreWindowFails(IndexSettings.MAX_RESCORE_WINDOW_SETTING.get(Settings.EMPTY) + 1);
@@ -437,7 +434,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
         int defaultMaxWindow = IndexSettings.MAX_RESCORE_WINDOW_SETTING.get(Settings.EMPTY);
         prepareCreate("idx").setSettings(Settings.builder().put(IndexSettings.MAX_RESCORE_WINDOW_SETTING.getKey(), defaultMaxWindow * 2))
             .get();
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(
             client().prepareSearch("idx").addRescorer(new QueryRescorerBuilder(matchAllQuery()).windowSize(defaultMaxWindow + 1)).get(),
@@ -454,7 +451,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
                     defaultMaxWindow * 2
                 )
         ).get();
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(
             client().prepareSearch("idx").addRescorer(new QueryRescorerBuilder(matchAllQuery()).windowSize(defaultMaxWindow + 1)).get(),
@@ -472,7 +469,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
                 .setSettings(Settings.builder().put(IndexSettings.MAX_RESCORE_WINDOW_SETTING.getKey(), defaultMaxWindow * 2))
                 .get()
         );
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(
             client().prepareSearch("idx").addRescorer(new QueryRescorerBuilder(matchAllQuery()).windowSize(defaultMaxWindow + 1)).get(),
@@ -493,7 +490,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
                 )
                 .get()
         );
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         assertHitCount(
             client().prepareSearch("idx").addRescorer(new QueryRescorerBuilder(matchAllQuery()).windowSize(defaultMaxWindow + 1)).get(),
@@ -517,7 +514,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
         prepareCreate("idx").addMapping("type", "field", "type=keyword").get();
         ensureGreen("idx");
 
-        client().prepareIndex("idx", "type")
+        client().prepareIndex("idx")
             .setId("1")
             .setSource("{\"field\" : 80315953321748200608 }", XContentType.JSON)
             .setRefreshPolicy(RefreshPolicy.IMMEDIATE)
@@ -533,7 +530,7 @@ public class SimpleSearchIT extends OpenSearchIntegTestCase {
 
     public void testTooLongRegexInRegexpQuery() throws Exception {
         createIndex("idx");
-        indexRandom(true, client().prepareIndex("idx", "type").setSource("{}", XContentType.JSON));
+        indexRandom(true, client().prepareIndex("idx").setSource("{}", XContentType.JSON));
 
         int defaultMaxRegexLength = IndexSettings.MAX_REGEX_LENGTH_SETTING.get(Settings.EMPTY);
         StringBuilder regexp = new StringBuilder(defaultMaxRegexLength);

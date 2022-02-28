@@ -480,8 +480,8 @@ public class InternalEngine extends Engine {
 
             }
             syncTranslog(); // to persist noops associated with the advancement of the local checkpoint
-            assert localCheckpointTracker
-                .getPersistedCheckpoint() == maxSeqNo : "persisted local checkpoint did not advance to max seq no; is ["
+            assert localCheckpointTracker.getPersistedCheckpoint() == maxSeqNo
+                : "persisted local checkpoint did not advance to max seq no; is ["
                     + localCheckpointTracker.getPersistedCheckpoint()
                     + "], max seq no ["
                     + maxSeqNo
@@ -608,45 +608,6 @@ public class InternalEngine extends Engine {
         revisitIndexDeletionPolicyOnTranslogSynced();
     }
 
-    /**
-     * Creates a new history snapshot for reading operations since the provided seqno.
-     * The returned snapshot can be retrieved from either Lucene index or translog files.
-     */
-    @Override
-    public Translog.Snapshot readHistoryOperations(
-        String reason,
-        HistorySource historySource,
-        MapperService mapperService,
-        long startingSeqNo
-    ) throws IOException {
-        if (historySource == HistorySource.INDEX) {
-            return newChangesSnapshot(reason, mapperService, Math.max(0, startingSeqNo), Long.MAX_VALUE, false);
-        } else {
-            return getTranslog().newSnapshot(startingSeqNo, Long.MAX_VALUE);
-        }
-    }
-
-    /**
-     * Returns the estimated number of history operations whose seq# at least the provided seq# in this engine.
-     */
-    @Override
-    public int estimateNumberOfHistoryOperations(
-        String reason,
-        HistorySource historySource,
-        MapperService mapperService,
-        long startingSeqNo
-    ) throws IOException {
-        if (historySource == HistorySource.INDEX) {
-            try (
-                Translog.Snapshot snapshot = newChangesSnapshot(reason, mapperService, Math.max(0, startingSeqNo), Long.MAX_VALUE, false)
-            ) {
-                return snapshot.totalOperations();
-            }
-        } else {
-            return getTranslog().estimateTotalOperationsFromMinSeq(startingSeqNo);
-        }
-    }
-
     @Override
     public TranslogStats getTranslogStats() {
         return getTranslog().stats();
@@ -701,10 +662,7 @@ public class InternalEngine extends Engine {
                     DirectoryReader.open(indexWriter),
                     shardId
                 );
-                internalReaderManager = new OpenSearchReaderManager(
-                    directoryReader,
-                    new RamAccountingRefreshListener(engineConfig.getCircuitBreakerService())
-                );
+                internalReaderManager = new OpenSearchReaderManager(directoryReader);
                 lastCommittedSegmentInfos = store.readLastCommittedSegmentsInfo();
                 ExternalReaderManager externalReaderManager = new ExternalReaderManager(internalReaderManager, externalRefreshListener);
                 success = true;
@@ -1351,10 +1309,10 @@ public class InternalEngine extends Engine {
             int reservedDocs,
             IndexResult earlyResultOnPreFlightError
         ) {
-            assert useLuceneUpdateDocument == false
-                || indexIntoLucene : "use lucene update is set to true, but we're not indexing into lucene";
-            assert (indexIntoLucene
-                && earlyResultOnPreFlightError != null) == false : "can only index into lucene or have a preflight result but not both."
+            assert useLuceneUpdateDocument == false || indexIntoLucene
+                : "use lucene update is set to true, but we're not indexing into lucene";
+            assert (indexIntoLucene && earlyResultOnPreFlightError != null) == false
+                : "can only index into lucene or have a preflight result but not both."
                     + "indexIntoLucene: "
                     + indexIntoLucene
                     + "  earlyResultOnPreFlightError:"
@@ -1702,8 +1660,8 @@ public class InternalEngine extends Engine {
             int reservedDocs,
             DeleteResult earlyResultOnPreflightError
         ) {
-            assert (deleteFromLucene
-                && earlyResultOnPreflightError != null) == false : "can only delete from lucene or have a preflight result but not both."
+            assert (deleteFromLucene && earlyResultOnPreflightError != null) == false
+                : "can only delete from lucene or have a preflight result but not both."
                     + "deleteFromLucene: "
                     + deleteFromLucene
                     + "  earlyResultOnPreFlightError:"
@@ -1811,9 +1769,8 @@ public class InternalEngine extends Engine {
                         tombstone.version().setLongValue(1L);
                         assert tombstone.docs().size() == 1 : "Tombstone should have a single doc [" + tombstone + "]";
                         final ParseContext.Document doc = tombstone.docs().get(0);
-                        assert doc.getField(
-                            SeqNoFieldMapper.TOMBSTONE_NAME
-                        ) != null : "Noop tombstone document but _tombstone field is not set [" + doc + " ]";
+                        assert doc.getField(SeqNoFieldMapper.TOMBSTONE_NAME) != null
+                            : "Noop tombstone document but _tombstone field is not set [" + doc + " ]";
                         doc.add(softDeletesField);
                         indexWriter.addDocument(doc);
                     } catch (final Exception ex) {
@@ -2370,9 +2327,8 @@ public class InternalEngine extends Engine {
     @Override
     protected final void closeNoLock(String reason, CountDownLatch closedLatch) {
         if (isClosed.compareAndSet(false, true)) {
-            assert rwl.isWriteLockedByCurrentThread()
-                || failEngineLock
-                    .isHeldByCurrentThread() : "Either the write lock must be held or the engine must be currently be failing itself";
+            assert rwl.isWriteLockedByCurrentThread() || failEngineLock.isHeldByCurrentThread()
+                : "Either the write lock must be held or the engine must be currently be failing itself";
             try {
                 this.versionMap.clear();
                 if (internalReaderManager != null) {
@@ -2823,22 +2779,6 @@ public class InternalEngine extends Engine {
     @Override
     public Translog.Snapshot newChangesSnapshot(
         String source,
-        HistorySource historySource,
-        MapperService mapperService,
-        long fromSeqNo,
-        long toSeqNo,
-        boolean requiredFullRange
-    ) throws IOException {
-        if (historySource == HistorySource.INDEX) {
-            return newChangesSnapshot(source, mapperService, fromSeqNo, toSeqNo, requiredFullRange);
-        } else {
-            return getTranslog().newSnapshot(fromSeqNo, toSeqNo, requiredFullRange);
-        }
-    }
-
-    @Override
-    public Translog.Snapshot newChangesSnapshot(
-        String source,
         MapperService mapperService,
         long fromSeqNo,
         long toSeqNo,
@@ -2870,28 +2810,8 @@ public class InternalEngine extends Engine {
         }
     }
 
-    @Override
-    public boolean hasCompleteOperationHistory(String reason, HistorySource historySource, MapperService mapperService, long startingSeqNo)
-        throws IOException {
-        if (historySource == HistorySource.INDEX) {
-            return getMinRetainedSeqNo() <= startingSeqNo;
-        } else {
-            final long currentLocalCheckpoint = localCheckpointTracker.getProcessedCheckpoint();
-            // avoid scanning translog if not necessary
-            if (startingSeqNo > currentLocalCheckpoint) {
-                return true;
-            }
-            final LocalCheckpointTracker tracker = new LocalCheckpointTracker(startingSeqNo, startingSeqNo - 1);
-            try (Translog.Snapshot snapshot = getTranslog().newSnapshot(startingSeqNo, Long.MAX_VALUE)) {
-                Translog.Operation operation;
-                while ((operation = snapshot.next()) != null) {
-                    if (operation.seqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO) {
-                        tracker.markSeqNoAsProcessed(operation.seqNo());
-                    }
-                }
-            }
-            return tracker.getProcessedCheckpoint() >= currentLocalCheckpoint;
-        }
+    public boolean hasCompleteOperationHistory(String reason, long startingSeqNo) {
+        return getMinRetainedSeqNo() <= startingSeqNo;
     }
 
     /**
@@ -2902,13 +2822,8 @@ public class InternalEngine extends Engine {
         return softDeletesPolicy.getMinRetainedSeqNo();
     }
 
-    @Override
-    public Closeable acquireHistoryRetentionLock(HistorySource historySource) {
-        if (historySource == HistorySource.INDEX) {
-            return softDeletesPolicy.acquireRetentionLock();
-        } else {
-            return translog.acquireRetentionLock();
-        }
+    public Closeable acquireHistoryRetentionLock() {
+        return softDeletesPolicy.acquireRetentionLock();
     }
 
     /**

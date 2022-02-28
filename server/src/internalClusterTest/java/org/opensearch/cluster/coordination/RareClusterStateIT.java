@@ -291,7 +291,7 @@ public class RareClusterStateIT extends OpenSearchIntegTestCase {
 
         // this request does not change the cluster state, because mapping is already created,
         // we don't await and cancel committed publication
-        ActionFuture<IndexResponse> docIndexResponse = client().prepareIndex("index", "type", "1").setSource("field", 42).execute();
+        ActionFuture<IndexResponse> docIndexResponse = client().prepareIndex("index").setId("1").setSource("field", 42).execute();
 
         // Wait a bit to make sure that the reason why we did not get a response
         // is that cluster state processing is blocked and not just that it takes
@@ -376,9 +376,9 @@ public class RareClusterStateIT extends OpenSearchIntegTestCase {
             assertNotNull(mapper.mappers().getMapper("field"));
         });
 
-        final ActionFuture<IndexResponse> docIndexResponse = client().prepareIndex("index", "type", "1").setSource("field", 42).execute();
+        final ActionFuture<IndexResponse> docIndexResponse = client().prepareIndex("index").setId("1").setSource("field", 42).execute();
 
-        assertBusy(() -> assertTrue(client().prepareGet("index", "type", "1").get().isExists()));
+        assertBusy(() -> assertTrue(client().prepareGet("index", "1").get().isExists()));
 
         // index another document, this time using dynamic mappings.
         // The ack timeout of 0 on dynamic mapping updates makes it possible for the document to be indexed on the primary, even
@@ -386,7 +386,7 @@ public class RareClusterStateIT extends OpenSearchIntegTestCase {
         // this request does not change the cluster state, because the mapping is dynamic,
         // we need to await and cancel committed publication
         ActionFuture<IndexResponse> dynamicMappingsFut = executeAndCancelCommittedPublication(
-            client().prepareIndex("index", "type", "2").setSource("field2", 42)
+            client().prepareIndex("index").setId("2").setSource("field2", 42)
         );
 
         // ...and wait for second mapping to be available on master
@@ -400,7 +400,7 @@ public class RareClusterStateIT extends OpenSearchIntegTestCase {
             assertNotNull(mapper.mappers().getMapper("field2"));
         });
 
-        assertBusy(() -> assertTrue(client().prepareGet("index", "type", "2").get().isExists()));
+        assertBusy(() -> assertTrue(client().prepareGet("index", "2").get().isExists()));
 
         // The mappings have not been propagated to the replica yet as a consequence the document count not be indexed
         // We wait on purpose to make sure that the document is not indexed because the shard operation is stalled

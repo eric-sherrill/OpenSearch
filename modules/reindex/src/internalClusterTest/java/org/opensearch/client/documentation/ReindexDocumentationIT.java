@@ -302,7 +302,7 @@ public class ReindexDocumentationIT extends OpenSearchIntegTestCase {
             false,
             true,
             IntStream.range(0, numDocs)
-                .mapToObj(i -> client().prepareIndex(INDEX_NAME, "_doc", Integer.toString(i)).setSource("n", Integer.toString(i)))
+                .mapToObj(i -> client().prepareIndex(INDEX_NAME).setId(Integer.toString(i)).setSource("n", Integer.toString(i)))
                 .collect(Collectors.toList())
         );
 
@@ -311,7 +311,7 @@ public class ReindexDocumentationIT extends OpenSearchIntegTestCase {
         assertThat(ALLOWED_OPERATIONS.drainPermits(), equalTo(0));
 
         ReindexRequestBuilder builder = new ReindexRequestBuilder(client, ReindexAction.INSTANCE).source(INDEX_NAME)
-            .destination("target_index", "_doc");
+            .destination("target_index");
         // Scroll by 1 so that cancellation is easier to control
         builder.source().setSize(1);
 

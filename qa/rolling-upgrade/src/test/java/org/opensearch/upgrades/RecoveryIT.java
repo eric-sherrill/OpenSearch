@@ -48,9 +48,6 @@ import org.opensearch.common.util.concurrent.AbstractRunnable;
 import org.opensearch.common.xcontent.support.XContentMapValues;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.rest.RestStatus;
-import org.opensearch.rest.action.document.RestGetAction;
-import org.opensearch.rest.action.document.RestIndexAction;
-import org.opensearch.rest.action.document.RestUpdateAction;
 import org.opensearch.test.rest.yaml.ObjectPath;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
@@ -67,7 +64,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
-import static com.carrotsearch.randomizedtesting.RandomizedTest.randomAsciiOfLength;
+import static com.carrotsearch.randomizedtesting.RandomizedTest.randomAsciiLettersOfLength;
 import static org.opensearch.cluster.routing.UnassignedInfo.INDEX_DELAYED_NODE_LEFT_TIMEOUT_SETTING;
 import static org.opensearch.cluster.routing.allocation.decider.EnableAllocationDecider.INDEX_ROUTING_ALLOCATION_ENABLE_SETTING;
 import static org.opensearch.cluster.routing.allocation.decider.MaxRetryAllocationDecider.SETTING_ALLOCATION_MAX_RETRY;
@@ -123,9 +120,8 @@ public class RecoveryIT extends AbstractRollingTestCase {
     private int indexDocs(String index, final int idStart, final int numDocs) throws IOException {
         for (int i = 0; i < numDocs; i++) {
             final int id = idStart + i;
-            Request indexDoc = new Request("PUT", index + "/test/" + id);
-            indexDoc.setJsonEntity("{\"test\": \"test_" + randomAsciiOfLength(2) + "\"}");
-            indexDoc.setOptions(expectWarnings(RestIndexAction.TYPES_DEPRECATION_MESSAGE));
+            Request indexDoc = new Request("PUT", index + "/_doc/" + id);
+            indexDoc.setJsonEntity("{\"test\": \"test_" + randomAsciiLettersOfLength(2) + "\"}");
             client().performRequest(indexDoc);
         }
         return numDocs;
@@ -659,8 +655,7 @@ public class RecoveryIT extends AbstractRollingTestCase {
             final int times = randomIntBetween(0, 2);
             for (int i = 0; i < times; i++) {
                 long value = randomNonNegativeLong();
-                Request update = new Request("POST", index + "/test/" + docId + "/_update");
-                update.setOptions(expectWarnings(RestUpdateAction.TYPES_DEPRECATION_MESSAGE));
+                Request update = new Request("POST", index + "/_update/" + docId);
                 update.setJsonEntity("{\"doc\": {\"updated_field\": " + value + "}}");
                 client().performRequest(update);
                 updates.put(docId, value);
@@ -668,8 +663,7 @@ public class RecoveryIT extends AbstractRollingTestCase {
         }
         client().performRequest(new Request("POST", index + "/_refresh"));
         for (int docId : updates.keySet()) {
-            Request get = new Request("GET", index + "/test/" + docId);
-            get.setOptions(expectWarnings(RestGetAction.TYPES_DEPRECATION_MESSAGE));
+            Request get = new Request("GET", index + "/_doc/" + docId);
             Map<String, Object> doc = entityAsMap(client().performRequest(get));
             assertThat(XContentMapValues.extractValue("_source.updated_field", doc), equalTo(updates.get(docId)));
         }

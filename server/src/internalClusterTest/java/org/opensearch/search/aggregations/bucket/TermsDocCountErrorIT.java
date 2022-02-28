@@ -81,7 +81,8 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int numUniqueTerms = between(2, numDocs / 2);
         for (int i = 0; i < numDocs; i++) {
             builders.add(
-                client().prepareIndex("idx", "type", "" + i)
+                client().prepareIndex("idx")
+                    .setId("" + i)
                     .setSource(
                         jsonBuilder().startObject()
                             .field(STRING_FIELD_NAME, "val" + randomInt(numUniqueTerms))
@@ -97,7 +98,8 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         );
         for (int i = 0; i < numDocs; i++) {
             builders.add(
-                client().prepareIndex("idx_single_shard", "type", "" + i)
+                client().prepareIndex("idx_single_shard")
+                    .setId("" + i)
                     .setSource(
                         jsonBuilder().startObject()
                             .field(STRING_FIELD_NAME, "val" + randomInt(numUniqueTerms))
@@ -117,7 +119,8 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         );
         for (int i = 0; i < numDocs; i++) {
             builders.add(
-                client().prepareIndex("idx_single_shard", "type", "" + i)
+                client().prepareIndex("idx_single_shard")
+                    .setId("" + i)
                     .setRouting(String.valueOf(randomInt(numRoutingValues)))
                     .setSource(
                         jsonBuilder().startObject()
@@ -147,7 +150,8 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
             for (int i = 0; i < entry.getValue(); i++) {
                 String term = entry.getKey();
                 builders.add(
-                    client().prepareIndex("idx_fixed_docs_0", "type", term + "-" + i)
+                    client().prepareIndex("idx_fixed_docs_0")
+                        .setId(term + "-" + i)
                         .setSource(jsonBuilder().startObject().field(STRING_FIELD_NAME, term).endObject())
                 );
             }
@@ -172,7 +176,8 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
             for (int i = 0; i < entry.getValue(); i++) {
                 String term = entry.getKey();
                 builders.add(
-                    client().prepareIndex("idx_fixed_docs_1", "type", term + "-" + i)
+                    client().prepareIndex("idx_fixed_docs_1")
+                        .setId(term + "-" + i)
                         .setSource(jsonBuilder().startObject().field(STRING_FIELD_NAME, term).field("shard", 1).endObject())
                 );
             }
@@ -195,7 +200,8 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
             for (int i = 0; i < entry.getValue(); i++) {
                 String term = entry.getKey();
                 builders.add(
-                    client().prepareIndex("idx_fixed_docs_2", "type", term + "-" + i)
+                    client().prepareIndex("idx_fixed_docs_2")
+                        .setId(term + "-" + i)
                         .setSource(jsonBuilder().startObject().field(STRING_FIELD_NAME, term).field("shard", 2).endObject())
                 );
             }
@@ -303,7 +309,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -317,7 +322,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -337,7 +341,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -351,7 +354,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -372,7 +374,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int shardSize = randomIntBetween(size, size * 2);
 
         SearchResponse testResponse = client().prepareSearch("idx_with_routing")
-            .setTypes("type")
             .setRouting(String.valueOf(between(1, numRoutingValues)))
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
@@ -393,7 +394,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -408,7 +408,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -429,7 +428,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -444,7 +442,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -465,7 +462,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -480,7 +476,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -501,7 +496,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -517,7 +511,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -539,7 +532,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -555,7 +547,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)
@@ -577,7 +568,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -591,7 +581,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -611,7 +600,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -625,7 +613,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -646,7 +633,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int shardSize = randomIntBetween(size, size * 2);
 
         SearchResponse testResponse = client().prepareSearch("idx_with_routing")
-            .setTypes("type")
             .setRouting(String.valueOf(between(1, numRoutingValues)))
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
@@ -667,7 +653,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -682,7 +667,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -703,7 +687,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -718,7 +701,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -739,7 +721,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -754,7 +735,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -775,7 +755,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -791,7 +770,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -813,7 +791,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -829,7 +806,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(LONG_FIELD_NAME)
@@ -851,7 +827,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -865,7 +840,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -885,7 +859,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -899,7 +872,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -920,7 +892,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int shardSize = randomIntBetween(size, size * 2);
 
         SearchResponse testResponse = client().prepareSearch("idx_with_routing")
-            .setTypes("type")
             .setRouting(String.valueOf(between(1, numRoutingValues)))
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
@@ -941,7 +912,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -956,7 +926,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -977,7 +946,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -992,7 +960,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1013,7 +980,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1028,7 +994,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1049,7 +1014,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1065,7 +1029,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1087,7 +1050,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         int size = randomIntBetween(1, 20);
         int shardSize = randomIntBetween(size, size * 2);
         SearchResponse accurateResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1103,7 +1065,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
         assertSearchResponse(accurateResponse);
 
         SearchResponse testResponse = client().prepareSearch("idx_single_shard")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(DOUBLE_FIELD_NAME)
@@ -1128,7 +1089,6 @@ public class TermsDocCountErrorIT extends OpenSearchIntegTestCase {
      */
     public void testFixedDocs() throws Exception {
         SearchResponse response = client().prepareSearch("idx_fixed_docs_0", "idx_fixed_docs_1", "idx_fixed_docs_2")
-            .setTypes("type")
             .addAggregation(
                 terms("terms").executionHint(randomExecutionHint())
                     .field(STRING_FIELD_NAME)

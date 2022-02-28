@@ -152,14 +152,16 @@ public class GeoShapeQueryTests extends GeoQueryTests {
 
         String location = "\"geo\" : {\"type\":\"polygon\", \"coordinates\":[[[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]]}";
 
-        client().prepareIndex("shapes", "type", "1")
+        client().prepareIndex("shapes")
+            .setId("1")
             .setSource(
                 String.format(Locale.ROOT, "{ %s, \"1\" : { %s, \"2\" : { %s, \"3\" : { %s } }} }", location, location, location, location),
                 XContentType.JSON
             )
             .setRefreshPolicy(IMMEDIATE)
             .get();
-        client().prepareIndex("test", "type", "1")
+        client().prepareIndex("test")
+            .setId("1")
             .setSource(
                 jsonBuilder().startObject()
                     .startObject("geo")
@@ -264,7 +266,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         ensureGreen();
 
         XContentBuilder docSource = gcb.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "_doc").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         // Create a random geometry collection to query
         GeometryCollectionBuilder queryCollection = RandomShapeGenerator.createGeometryCollection(random());
@@ -442,7 +444,8 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         client().admin().indices().prepareCreate("test").addMapping("type1", mapping, XContentType.JSON).get();
         ensureGreen();
 
-        client().prepareIndex("test", "type1", "blakely")
+        client().prepareIndex("test")
+            .setId("blakely")
             .setSource(
                 jsonBuilder().startObject()
                     .field("name", "Blakely Island")
@@ -478,7 +481,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
 
         // This search would fail if both geoshape indexing and geoshape filtering
         // used the bottom-level optimization in SpatialPrefixTree#recursiveGetNodes.
-        SearchResponse searchResponse = client().prepareSearch("test").setTypes("type1").setQuery(geoIntersectionQuery("geo", query)).get();
+        SearchResponse searchResponse = client().prepareSearch("test").setQuery(geoIntersectionQuery("geo", query)).get();
 
         assertSearchResponse(searchResponse);
         assertHitCount(searchResponse, 1);
@@ -493,7 +496,8 @@ public class GeoShapeQueryTests extends GeoQueryTests {
 
         EnvelopeBuilder shape = new EnvelopeBuilder(new Coordinate(-45, 45), new Coordinate(45, -45));
 
-        client().prepareIndex("shapes", "shape_type", "Big_Rectangle")
+        client().prepareIndex("shapes")
+            .setId("Big_Rectangle")
             .setSource(jsonBuilder().startObject().field("shape", shape).endObject())
             .setRefreshPolicy(IMMEDIATE)
             .get();
@@ -546,7 +550,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
                 .actionGet();
         }
         XContentBuilder docSource = gcb.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "type", "1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         GeoShapeQueryBuilder geoShapeQueryBuilder = QueryBuilders.geoShapeQuery("geo", pb);
         geoShapeQueryBuilder.relation(ShapeRelation.INTERSECTS);
@@ -587,7 +591,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         }
 
         XContentBuilder docSource = gcb.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "type", "1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         // index the mbr of the collection
         EnvelopeBuilder env = new EnvelopeBuilder(
@@ -595,7 +599,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
             new Coordinate(mbr.getMaxX(), mbr.getMinY())
         );
         docSource = env.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "type", "2").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("2").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         ShapeBuilder filterShape = (gcb.getShapeAt(randomIntBetween(0, gcb.numShapes() - 1)));
         GeoShapeQueryBuilder filter = QueryBuilders.geoShapeQuery("geo", filterShape).relation(ShapeRelation.CONTAINS);
@@ -613,7 +617,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         client().admin().indices().prepareCreate("test").addMapping("type", builder).execute().actionGet();
 
         XContentBuilder docSource = gcb.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "type", "1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         ExistsQueryBuilder eqb = QueryBuilders.existsQuery("geo");
         SearchResponse result = client().prepareSearch("test").setQuery(eqb).get();
@@ -644,7 +648,8 @@ public class GeoShapeQueryTests extends GeoQueryTests {
 
         ShapeBuilder shape = RandomShapeGenerator.createShape(random());
         try {
-            client().prepareIndex("geo_points_only", "type1", "1")
+            client().prepareIndex("geo_points_only")
+                .setId("1")
                 .setSource(jsonBuilder().startObject().field("location", shape).endObject())
                 .setRefreshPolicy(IMMEDIATE)
                 .get();
@@ -655,10 +660,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         }
 
         // test that point was inserted
-        SearchResponse response = client().prepareSearch("geo_points_only")
-            .setTypes("type1")
-            .setQuery(geoIntersectionQuery("location", shape))
-            .get();
+        SearchResponse response = client().prepareSearch("geo_points_only").setQuery(geoIntersectionQuery("location", shape)).get();
 
         assertHitCount(response, 1);
     }
@@ -686,20 +688,22 @@ public class GeoShapeQueryTests extends GeoQueryTests {
 
         // MULTIPOINT
         ShapeBuilder shape = RandomShapeGenerator.createShape(random(), RandomShapeGenerator.ShapeType.MULTIPOINT);
-        client().prepareIndex("geo_points_only", "type1", "1")
+        client().prepareIndex("geo_points_only")
+            .setId("1")
             .setSource(jsonBuilder().startObject().field("geo", shape).endObject())
             .setRefreshPolicy(IMMEDIATE)
             .get();
 
         // POINT
         shape = RandomShapeGenerator.createShape(random(), RandomShapeGenerator.ShapeType.POINT);
-        client().prepareIndex("geo_points_only", "type1", "2")
+        client().prepareIndex("geo_points_only")
+            .setId("2")
             .setSource(jsonBuilder().startObject().field("geo", shape).endObject())
             .setRefreshPolicy(IMMEDIATE)
             .get();
 
         // test that point was inserted
-        SearchResponse response = client().prepareSearch("geo_points_only").setTypes("type1").setQuery(matchAllQuery()).get();
+        SearchResponse response = client().prepareSearch("geo_points_only").setQuery(matchAllQuery()).get();
 
         assertHitCount(response, 2);
     }
@@ -712,11 +716,13 @@ public class GeoShapeQueryTests extends GeoQueryTests {
 
         EnvelopeBuilder shape = new EnvelopeBuilder(new Coordinate(-45, 45), new Coordinate(45, -45));
 
-        client().prepareIndex("shapes", "shape_type", "Big_Rectangle")
+        client().prepareIndex("shapes")
+            .setId("Big_Rectangle")
             .setSource(jsonBuilder().startObject().field("shape", shape).endObject())
             .setRefreshPolicy(IMMEDIATE)
             .get();
-        client().prepareIndex("test", "type1", "1")
+        client().prepareIndex("test")
+            .setId("1")
             .setSource(
                 jsonBuilder().startObject()
                     .field("name", "Document 1")
@@ -765,7 +771,8 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         createIndex("test", Settings.EMPTY, "type", mapping);
 
         ShapeBuilder shape = RandomShapeGenerator.createShape(random(), RandomShapeGenerator.ShapeType.MULTIPOINT);
-        client().prepareIndex("test", "type", "1")
+        client().prepareIndex("test")
+            .setId("1")
             .setSource(jsonBuilder().startObject().field("location", shape).endObject())
             .setRefreshPolicy(IMMEDIATE)
             .get();
@@ -788,7 +795,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         client().admin().indices().prepareCreate("test").addMapping("type", builder).get();
 
         XContentBuilder docSource = gcb.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "type", "1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         ShapeBuilder filterShape = (gcb.getShapeAt(gcb.numShapes() - 1));
 
@@ -835,7 +842,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
             .endArray()
             .endObject()
             .endObject();
-        client().prepareIndex("test", "type", "1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         GeoShapeQueryBuilder filter = QueryBuilders.geoShapeQuery(
             "geo",
@@ -949,7 +956,7 @@ public class GeoShapeQueryTests extends GeoQueryTests {
         EnvelopeBuilder envelopeBuilder = new EnvelopeBuilder(new Coordinate(178, 10), new Coordinate(-178, -10));
 
         XContentBuilder docSource = envelopeBuilder.toXContent(jsonBuilder().startObject().field("geo"), null).endObject();
-        client().prepareIndex("test", "type1", "1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
+        client().prepareIndex("test").setId("1").setSource(docSource).setRefreshPolicy(IMMEDIATE).get();
 
         ShapeBuilder filterShape = new PointBuilder(179, 0);
 
