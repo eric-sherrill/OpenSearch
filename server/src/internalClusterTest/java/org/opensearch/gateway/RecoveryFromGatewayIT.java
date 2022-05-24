@@ -51,7 +51,6 @@ import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Strings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.env.NodeEnvironment;
 import org.opensearch.index.Index;
 import org.opensearch.index.IndexService;
@@ -63,6 +62,7 @@ import org.opensearch.index.shard.ShardId;
 import org.opensearch.index.shard.ShardPath;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.indices.recovery.RecoveryState;
+import org.opensearch.indices.replication.common.ReplicationLuceneIndex;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.OpenSearchIntegTestCase.ClusterScope;
@@ -84,7 +84,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.IntStream;
 
-import static org.opensearch.cluster.coordination.ClusterBootstrapService.INITIAL_MASTER_NODES_SETTING;
+import static org.opensearch.cluster.coordination.ClusterBootstrapService.INITIAL_CLUSTER_MANAGER_NODES_SETTING;
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_NUMBER_OF_REPLICAS;
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_NUMBER_OF_SHARDS;
 import static org.opensearch.common.xcontent.XContentFactory.jsonBuilder;
@@ -115,16 +115,14 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
         String mapping = Strings.toString(
             XContentFactory.jsonBuilder()
                 .startObject()
-                .startObject("type1")
                 .startObject("properties")
                 .startObject("appAccountIds")
                 .field("type", "text")
                 .endObject()
                 .endObject()
                 .endObject()
-                .endObject()
         );
-        assertAcked(prepareCreate("test").addMapping("type1", mapping, XContentType.JSON));
+        assertAcked(prepareCreate("test").setMapping(mapping));
 
         client().prepareIndex("test")
             .setId("10990239")
@@ -212,7 +210,6 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
         String mapping = Strings.toString(
             XContentFactory.jsonBuilder()
                 .startObject()
-                .startObject("type1")
                 .startObject("properties")
                 .startObject("field")
                 .field("type", "text")
@@ -222,14 +219,13 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
                 .endObject()
                 .endObject()
                 .endObject()
-                .endObject()
         );
         // note: default replica settings are tied to #data nodes-1 which is 0 here. We can do with 1 in this test.
         int numberOfShards = numberOfShards();
         assertAcked(
             prepareCreate("test").setSettings(
                 Settings.builder().put(SETTING_NUMBER_OF_SHARDS, numberOfShards()).put(SETTING_NUMBER_OF_REPLICAS, randomIntBetween(0, 1))
-            ).addMapping("type1", mapping, XContentType.JSON)
+            ).setMapping(mapping)
         );
 
         int value1Docs;
@@ -388,7 +384,7 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
             public Settings onNodeStopped(String nodeName) {
                 return Settings.builder()
                     .put(RECOVER_AFTER_NODES_SETTING.getKey(), 2)
-                    .putList(INITIAL_MASTER_NODES_SETTING.getKey()) // disable bootstrapping
+                    .putList(INITIAL_CLUSTER_MANAGER_NODES_SETTING.getKey()) // disable bootstrapping
                     .build();
             }
 
@@ -449,7 +445,7 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
             .setSource(jsonBuilder().startObject().field("field", "value3").endObject())
             .execute()
             .actionGet();
-        // TODO: remove once refresh doesn't fail immediately if there a master block:
+        // TODO: remove once refresh doesn't fail immediately if there a cluster-manager block:
         // https://github.com/elastic/elasticsearch/issues/9997
         // client().admin().cluster().prepareHealth("test").setWaitForYellowStatus().get();
         logger.info("--> refreshing all indices after indexing is complete");
@@ -466,11 +462,9 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
             .preparePutTemplate("template_1")
             .setPatterns(Collections.singletonList("te*"))
             .setOrder(0)
-            .addMapping(
-                "type1",
+            .setMapping(
                 XContentFactory.jsonBuilder()
                     .startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("field1")
                     .field("type", "text")
@@ -479,7 +473,6 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
                     .startObject("field2")
                     .field("type", "keyword")
                     .field("store", true)
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -519,7 +512,7 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
     }
 
     public void testReuseInFileBasedPeerRecovery() throws Exception {
-        internalCluster().startMasterOnlyNode();
+        internalCluster().startClusterManagerOnlyNode();
         final String primaryNode = internalCluster().startDataOnlyNode(nodeSettings(0));
 
         // create the index with our mapping
@@ -555,7 +548,7 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
         final Set<String> files = new HashSet<>();
         for (final RecoveryState recoveryState : initialRecoveryReponse.shardRecoveryStates().get("test")) {
             if (recoveryState.getTargetNode().getName().equals(replicaNode)) {
-                for (final RecoveryState.FileDetail file : recoveryState.getIndex().fileDetails()) {
+                for (final ReplicationLuceneIndex.FileMetadata file : recoveryState.getIndex().fileDetails()) {
                     files.add(file.name());
                 }
                 break;
@@ -615,7 +608,7 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
             long reused = 0;
             int filesRecovered = 0;
             int filesReused = 0;
-            for (final RecoveryState.FileDetail file : recoveryState.getIndex().fileDetails()) {
+            for (final ReplicationLuceneIndex.FileMetadata file : recoveryState.getIndex().fileDetails()) {
                 if (files.contains(file.name()) == false) {
                     recovered += file.length();
                     filesRecovered++;
@@ -672,7 +665,7 @@ public class RecoveryFromGatewayIT extends OpenSearchIntegTestCase {
     }
 
     public void testStartedShardFoundIfStateNotYetProcessed() throws Exception {
-        // nodes may need to report the shards they processed the initial recovered cluster state from the master
+        // nodes may need to report the shards they processed the initial recovered cluster state from the cluster-manager
         final String nodeName = internalCluster().startNode();
         createIndex("test", Settings.builder().put(SETTING_NUMBER_OF_SHARDS, 1).build());
         final String customDataPath = IndexMetadata.INDEX_DATA_PATH_SETTING.get(

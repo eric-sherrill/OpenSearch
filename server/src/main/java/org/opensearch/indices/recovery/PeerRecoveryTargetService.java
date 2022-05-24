@@ -37,10 +37,10 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.store.RateLimiter;
+import org.opensearch.ExceptionsHelper;
 import org.opensearch.LegacyESVersion;
 import org.opensearch.OpenSearchException;
 import org.opensearch.OpenSearchTimeoutException;
-import org.opensearch.ExceptionsHelper;
 import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRunnable;
 import org.opensearch.action.support.ChannelActionListener;
@@ -69,7 +69,10 @@ import org.opensearch.index.shard.ShardNotFoundException;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.Translog;
 import org.opensearch.index.translog.TranslogCorruptedException;
-import org.opensearch.indices.recovery.RecoveriesCollection.RecoveryRef;
+import org.opensearch.indices.replication.common.ReplicationCollection;
+import org.opensearch.indices.replication.common.ReplicationCollection.ReplicationRef;
+import org.opensearch.indices.replication.common.ReplicationLuceneIndex;
+import org.opensearch.indices.replication.common.ReplicationTimer;
 import org.opensearch.tasks.Task;
 import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.ConnectTransportException;
@@ -93,11 +96,18 @@ import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
  * <p>
  * Note, it can be safely assumed that there will only be a single recovery per shard (index+id) and
  * not several of them (since we don't allocate several shard replicas to the same node).
+ *
+ * @opensearch.internal
  */
 public class PeerRecoveryTargetService implements IndexEventListener {
 
     private static final Logger logger = LogManager.getLogger(PeerRecoveryTargetService.class);
 
+    /**
+     * The internal actions
+     *
+     * @opensearch.internal
+     */
     public static class Actions {
         public static final String FILES_INFO = "internal:index/shard/recovery/filesInfo";
         public static final String FILE_CHUNK = "internal:index/shard/recovery/file_chunk";
@@ -115,7 +125,7 @@ public class PeerRecoveryTargetService implements IndexEventListener {
     private final RecoverySettings recoverySettings;
     private final ClusterService clusterService;
 
-    private final RecoveriesCollection onGoingRecoveries;
+    private final ReplicationCollection<RecoveryTarget> onGoingRecoveries;
 
     public PeerRecoveryTargetService(
         ThreadPool threadPool,
@@ -127,7 +137,7 @@ public class PeerRecoveryTargetService implements IndexEventListener {
         this.transportService = transportService;
         this.recoverySettings = recoverySettings;
         this.clusterService = clusterService;
-        this.onGoingRecoveries = new RecoveriesCollection(logger, threadPool);
+        this.onGoingRecoveries = new ReplicationCollection<>(logger, threadPool);
 
         transportService.registerRequestHandler(
             Actions.FILES_INFO,
@@ -176,13 +186,16 @@ public class PeerRecoveryTargetService implements IndexEventListener {
     @Override
     public void beforeIndexShardClosed(ShardId shardId, @Nullable IndexShard indexShard, Settings indexSettings) {
         if (indexShard != null) {
-            onGoingRecoveries.cancelRecoveriesForShard(shardId, "shard closed");
+            onGoingRecoveries.cancelForShard(shardId, "shard closed");
         }
     }
 
     public void startRecovery(final IndexShard indexShard, final DiscoveryNode sourceNode, final RecoveryListener listener) {
         // create a new recovery status, and process...
-        final long recoveryId = onGoingRecoveries.startRecovery(indexShard, sourceNode, listener, recoverySettings.activityTimeout());
+        final long recoveryId = onGoingRecoveries.start(
+            new RecoveryTarget(indexShard, sourceNode, listener),
+            recoverySettings.activityTimeout()
+        );
         // we fork off quickly here and go async but this is called from the cluster state applier thread too and that can cause
         // assertions to trip if we executed it on the same thread hence we fork off to the generic threadpool.
         threadPool.generic().execute(new RecoveryRunner(recoveryId));
@@ -199,9 +212,9 @@ public class PeerRecoveryTargetService implements IndexEventListener {
     }
 
     private void retryRecovery(final long recoveryId, final TimeValue retryAfter, final TimeValue activityTimeout) {
-        RecoveryTarget newTarget = onGoingRecoveries.resetRecovery(recoveryId, activityTimeout);
+        RecoveryTarget newTarget = onGoingRecoveries.reset(recoveryId, activityTimeout);
         if (newTarget != null) {
-            threadPool.scheduleUnlessShuttingDown(retryAfter, ThreadPool.Names.GENERIC, new RecoveryRunner(newTarget.recoveryId()));
+            threadPool.scheduleUnlessShuttingDown(retryAfter, ThreadPool.Names.GENERIC, new RecoveryRunner(newTarget.getId()));
         }
     }
 
@@ -215,16 +228,14 @@ public class PeerRecoveryTargetService implements IndexEventListener {
         final String actionName;
         final TransportRequest requestToSend;
         final StartRecoveryRequest startRequest;
-        final RecoveryState.Timer timer;
-        CancellableThreads cancellableThreads;
-        try (RecoveryRef recoveryRef = onGoingRecoveries.getRecovery(recoveryId)) {
+        final ReplicationTimer timer;
+        try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.get(recoveryId)) {
             if (recoveryRef == null) {
                 logger.trace("not running recovery with id [{}] - can not find it (probably finished)", recoveryId);
                 return;
             }
-            final RecoveryTarget recoveryTarget = recoveryRef.target();
+            final RecoveryTarget recoveryTarget = recoveryRef.get();
             timer = recoveryTarget.state().getTimer();
-            cancellableThreads = recoveryTarget.cancellableThreads();
             if (preExistingRequest == null) {
                 try {
                     final IndexShard indexShard = recoveryTarget.indexShard();
@@ -241,7 +252,7 @@ public class PeerRecoveryTargetService implements IndexEventListener {
                 } catch (final Exception e) {
                     // this will be logged as warning later on...
                     logger.trace("unexpected error while preparing shard for peer recovery, failing recovery", e);
-                    onGoingRecoveries.failRecovery(
+                    onGoingRecoveries.fail(
                         recoveryId,
                         new RecoveryFailedException(recoveryTarget.state(), "failed to prepare shard for recovery", e),
                         true
@@ -256,21 +267,12 @@ public class PeerRecoveryTargetService implements IndexEventListener {
                 logger.trace("{} reestablishing recovery from {}", startRequest.shardId(), startRequest.sourceNode());
             }
         }
-        RecoveryResponseHandler responseHandler = new RecoveryResponseHandler(startRequest, timer);
-
-        try {
-            cancellableThreads.executeIO(() ->
-            // we still execute under cancelableThreads here to ensure we interrupt any blocking call to the network if any
-            // on the underlying transport. It's unclear if we need this here at all after moving to async execution but
-            // the issues that a missing call to this could cause are sneaky and hard to debug. If we don't need it on this
-            // call we can potentially remove it altogether which we should do it in a major release only with enough
-            // time to test. This shoudl be done for 7.0 if possible
-            transportService.sendRequest(startRequest.sourceNode(), actionName, requestToSend, responseHandler));
-        } catch (CancellableThreads.ExecutionCancelledException e) {
-            logger.trace("recovery cancelled", e);
-        } catch (Exception e) {
-            responseHandler.onException(e);
-        }
+        transportService.sendRequest(
+            startRequest.sourceNode(),
+            actionName,
+            requestToSend,
+            new RecoveryResponseHandler(startRequest, timer)
+        );
     }
 
     /**
@@ -341,29 +343,23 @@ public class PeerRecoveryTargetService implements IndexEventListener {
             localNode,
             metadataSnapshot,
             recoveryTarget.state().getPrimary(),
-            recoveryTarget.recoveryId(),
+            recoveryTarget.getId(),
             startingSeqNo
         );
         return request;
-    }
-
-    public interface RecoveryListener {
-        void onRecoveryDone(RecoveryState state);
-
-        void onRecoveryFailure(RecoveryState state, RecoveryFailedException e, boolean sendShardFailure);
     }
 
     class PrepareForTranslogOperationsRequestHandler implements TransportRequestHandler<RecoveryPrepareForTranslogOperationsRequest> {
 
         @Override
         public void messageReceived(RecoveryPrepareForTranslogOperationsRequest request, TransportChannel channel, Task task) {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
                 final ActionListener<Void> listener = createOrFinishListener(recoveryRef, channel, Actions.PREPARE_TRANSLOG, request);
                 if (listener == null) {
                     return;
                 }
 
-                recoveryRef.target().prepareForTranslogOperations(request.totalTranslogOps(), listener);
+                recoveryRef.get().prepareForTranslogOperations(request.totalTranslogOps(), listener);
             }
         }
     }
@@ -372,13 +368,13 @@ public class PeerRecoveryTargetService implements IndexEventListener {
 
         @Override
         public void messageReceived(RecoveryFinalizeRecoveryRequest request, TransportChannel channel, Task task) throws Exception {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
                 final ActionListener<Void> listener = createOrFinishListener(recoveryRef, channel, Actions.FINALIZE, request);
                 if (listener == null) {
                     return;
                 }
 
-                recoveryRef.target().finalizeRecovery(request.globalCheckpoint(), request.trimAboveSeqNo(), listener);
+                recoveryRef.get().finalizeRecovery(request.globalCheckpoint(), request.trimAboveSeqNo(), listener);
             }
         }
     }
@@ -388,8 +384,8 @@ public class PeerRecoveryTargetService implements IndexEventListener {
         @Override
         public void messageReceived(final RecoveryHandoffPrimaryContextRequest request, final TransportChannel channel, Task task)
             throws Exception {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
-                recoveryRef.target().handoffPrimaryContext(request.primaryContext());
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
+                recoveryRef.get().handoffPrimaryContext(request.primaryContext());
             }
             channel.sendResponse(TransportResponse.Empty.INSTANCE);
         }
@@ -401,8 +397,8 @@ public class PeerRecoveryTargetService implements IndexEventListener {
         @Override
         public void messageReceived(final RecoveryTranslogOperationsRequest request, final TransportChannel channel, Task task)
             throws IOException {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
-                final RecoveryTarget recoveryTarget = recoveryRef.target();
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
+                final RecoveryTarget recoveryTarget = recoveryRef.get();
                 final ActionListener<Void> listener = createOrFinishListener(
                     recoveryRef,
                     channel,
@@ -421,9 +417,9 @@ public class PeerRecoveryTargetService implements IndexEventListener {
         private void performTranslogOps(
             final RecoveryTranslogOperationsRequest request,
             final ActionListener<Void> listener,
-            final RecoveryRef recoveryRef
+            final ReplicationRef<RecoveryTarget> recoveryRef
         ) {
-            final RecoveryTarget recoveryTarget = recoveryRef.target();
+            final RecoveryTarget recoveryTarget = recoveryRef.get();
 
             final ClusterStateObserver observer = new ClusterStateObserver(clusterService, null, logger, threadPool.getThreadContext());
             final Consumer<Exception> retryOnMappingException = exception -> {
@@ -436,7 +432,12 @@ public class PeerRecoveryTargetService implements IndexEventListener {
                     @Override
                     public void onNewClusterState(ClusterState state) {
                         threadPool.generic().execute(ActionRunnable.wrap(listener, l -> {
-                            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
+                            try (
+                                ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(
+                                    request.recoveryId(),
+                                    request.shardId()
+                                )
+                            ) {
                                 performTranslogOps(request, listener, recoveryRef);
                             }
                         }));
@@ -482,13 +483,13 @@ public class PeerRecoveryTargetService implements IndexEventListener {
 
         @Override
         public void messageReceived(RecoveryFilesInfoRequest request, TransportChannel channel, Task task) throws Exception {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
                 final ActionListener<Void> listener = createOrFinishListener(recoveryRef, channel, Actions.FILES_INFO, request);
                 if (listener == null) {
                     return;
                 }
 
-                recoveryRef.target()
+                recoveryRef.get()
                     .receiveFileInfo(
                         request.phase1FileNames,
                         request.phase1FileSizes,
@@ -505,13 +506,13 @@ public class PeerRecoveryTargetService implements IndexEventListener {
 
         @Override
         public void messageReceived(RecoveryCleanFilesRequest request, TransportChannel channel, Task task) throws Exception {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
                 final ActionListener<Void> listener = createOrFinishListener(recoveryRef, channel, Actions.CLEAN_FILES, request);
                 if (listener == null) {
                     return;
                 }
 
-                recoveryRef.target()
+                recoveryRef.get()
                     .cleanFiles(request.totalTranslogOps(), request.getGlobalCheckpoint(), request.sourceMetaSnapshot(), listener);
             }
         }
@@ -524,15 +525,15 @@ public class PeerRecoveryTargetService implements IndexEventListener {
 
         @Override
         public void messageReceived(final RecoveryFileChunkRequest request, TransportChannel channel, Task task) throws Exception {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecoverySafe(request.recoveryId(), request.shardId())) {
-                final RecoveryTarget recoveryTarget = recoveryRef.target();
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.getSafe(request.recoveryId(), request.shardId())) {
+                final RecoveryTarget recoveryTarget = recoveryRef.get();
                 final ActionListener<Void> listener = createOrFinishListener(recoveryRef, channel, Actions.FILE_CHUNK, request);
                 if (listener == null) {
                     return;
                 }
 
-                final RecoveryState.Index indexState = recoveryTarget.state().getIndex();
-                if (request.sourceThrottleTimeInNanos() != RecoveryState.Index.UNKNOWN) {
+                final ReplicationLuceneIndex indexState = recoveryTarget.state().getIndex();
+                if (request.sourceThrottleTimeInNanos() != ReplicationLuceneIndex.UNKNOWN) {
                     indexState.addSourceThrottling(request.sourceThrottleTimeInNanos());
                 }
 
@@ -560,7 +561,7 @@ public class PeerRecoveryTargetService implements IndexEventListener {
     }
 
     private ActionListener<Void> createOrFinishListener(
-        final RecoveryRef recoveryRef,
+        final ReplicationRef<RecoveryTarget> recoveryRef,
         final TransportChannel channel,
         final String action,
         final RecoveryTransportRequest request
@@ -569,13 +570,13 @@ public class PeerRecoveryTargetService implements IndexEventListener {
     }
 
     private ActionListener<Void> createOrFinishListener(
-        final RecoveryRef recoveryRef,
+        final ReplicationRef<RecoveryTarget> recoveryRef,
         final TransportChannel channel,
         final String action,
         final RecoveryTransportRequest request,
         final CheckedFunction<Void, TransportResponse, Exception> responseFn
     ) {
-        final RecoveryTarget recoveryTarget = recoveryRef.target();
+        final RecoveryTarget recoveryTarget = recoveryRef.get();
         final ActionListener<TransportResponse> channelListener = new ChannelActionListener<>(channel, action, request);
         final ActionListener<Void> voidListener = ActionListener.map(channelListener, responseFn);
 
@@ -606,12 +607,12 @@ public class PeerRecoveryTargetService implements IndexEventListener {
 
         @Override
         public void onFailure(Exception e) {
-            try (RecoveryRef recoveryRef = onGoingRecoveries.getRecovery(recoveryId)) {
+            try (ReplicationRef<RecoveryTarget> recoveryRef = onGoingRecoveries.get(recoveryId)) {
                 if (recoveryRef != null) {
                     logger.error(() -> new ParameterizedMessage("unexpected error during recovery [{}], failing shard", recoveryId), e);
-                    onGoingRecoveries.failRecovery(
+                    onGoingRecoveries.fail(
                         recoveryId,
-                        new RecoveryFailedException(recoveryRef.target().state(), "unexpected error", e),
+                        new RecoveryFailedException(recoveryRef.get().state(), "unexpected error", e),
                         true // be safe
                     );
                 } else {
@@ -633,9 +634,9 @@ public class PeerRecoveryTargetService implements IndexEventListener {
 
         private final long recoveryId;
         private final StartRecoveryRequest request;
-        private final RecoveryState.Timer timer;
+        private final ReplicationTimer timer;
 
-        private RecoveryResponseHandler(final StartRecoveryRequest request, final RecoveryState.Timer timer) {
+        private RecoveryResponseHandler(final StartRecoveryRequest request, final ReplicationTimer timer) {
             this.recoveryId = request.recoveryId();
             this.request = request;
             this.timer = timer;
@@ -645,7 +646,7 @@ public class PeerRecoveryTargetService implements IndexEventListener {
         public void handleResponse(RecoveryResponse recoveryResponse) {
             final TimeValue recoveryTime = new TimeValue(timer.time());
             // do this through ongoing recoveries to remove it from the collection
-            onGoingRecoveries.markRecoveryAsDone(recoveryId);
+            onGoingRecoveries.markAsDone(recoveryId);
             if (logger.isTraceEnabled()) {
                 StringBuilder sb = new StringBuilder();
                 sb.append('[')
@@ -706,11 +707,7 @@ public class PeerRecoveryTargetService implements IndexEventListener {
             Throwable cause = ExceptionsHelper.unwrapCause(e);
             if (cause instanceof CancellableThreads.ExecutionCancelledException) {
                 // this can also come from the source wrapped in a RemoteTransportException
-                onGoingRecoveries.failRecovery(
-                    recoveryId,
-                    new RecoveryFailedException(request, "source has canceled the recovery", cause),
-                    false
-                );
+                onGoingRecoveries.fail(recoveryId, new RecoveryFailedException(request, "source has canceled the recovery", cause), false);
                 return;
             }
             if (cause instanceof RecoveryEngineException) {
@@ -763,11 +760,11 @@ public class PeerRecoveryTargetService implements IndexEventListener {
             }
 
             if (cause instanceof AlreadyClosedException) {
-                onGoingRecoveries.failRecovery(recoveryId, new RecoveryFailedException(request, "source shard is closed", cause), false);
+                onGoingRecoveries.fail(recoveryId, new RecoveryFailedException(request, "source shard is closed", cause), false);
                 return;
             }
 
-            onGoingRecoveries.failRecovery(recoveryId, new RecoveryFailedException(request, e), true);
+            onGoingRecoveries.fail(recoveryId, new RecoveryFailedException(request, e), true);
         }
 
         @Override

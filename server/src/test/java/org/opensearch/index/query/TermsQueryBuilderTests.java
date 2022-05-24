@@ -50,7 +50,6 @@ import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.index.get.GetResult;
-import org.opensearch.index.mapper.TypeFieldMapper;
 import org.opensearch.indices.TermsLookup;
 import org.opensearch.test.AbstractQueryTestCase;
 import org.hamcrest.CoreMatchers;
@@ -119,9 +118,7 @@ public class TermsQueryBuilderTests extends AbstractQueryTestCase<TermsQueryBuil
 
     private TermsLookup randomTermsLookup() {
         // Randomly choose between a typeless terms lookup and one with an explicit type to make sure we are
-        TermsLookup lookup = maybeIncludeType && randomBoolean()
-            ? new TermsLookup(randomAlphaOfLength(10), randomAlphaOfLength(10), randomAlphaOfLength(10), termsPath)
-            : new TermsLookup(randomAlphaOfLength(10), randomAlphaOfLength(10), termsPath);
+        TermsLookup lookup = new TermsLookup(randomAlphaOfLength(10), randomAlphaOfLength(10), termsPath);
         // testing both cases.
         lookup.routing(randomBoolean() ? randomAlphaOfLength(10) : null);
         return lookup;
@@ -353,12 +350,6 @@ public class TermsQueryBuilderTests extends AbstractQueryTestCase<TermsQueryBuil
         assertEquals(Arrays.asList(5, 42d), TermsQueryBuilder.convertBack(TermsQueryBuilder.convert(list)));
     }
 
-    public void testTypeField() throws IOException {
-        TermsQueryBuilder builder = QueryBuilders.termsQuery("_type", "value1", "value2");
-        builder.doToQuery(createShardContext());
-        assertWarnings(TypeFieldMapper.TYPES_DEPRECATION_MESSAGE);
-    }
-
     public void testRewriteIndexQueryToMatchNone() throws IOException {
         TermsQueryBuilder query = new TermsQueryBuilder("_index", "does_not_exist", "also_does_not_exist");
         QueryShardContext queryShardContext = createShardContext();
@@ -379,13 +370,6 @@ public class TermsQueryBuilderTests extends AbstractQueryTestCase<TermsQueryBuil
         try {
             QueryBuilder query = super.parseQuery(parser);
             assertThat(query, CoreMatchers.instanceOf(TermsQueryBuilder.class));
-
-            TermsQueryBuilder termsQuery = (TermsQueryBuilder) query;
-            String deprecationWarning = "Deprecated field [type] used, this field is unused and will be removed entirely";
-            if (termsQuery.isTypeless() == false && !assertedWarnings.contains(deprecationWarning)) {
-                assertWarnings(deprecationWarning);
-                assertedWarnings.add(deprecationWarning);
-            }
             return query;
         } finally {
 

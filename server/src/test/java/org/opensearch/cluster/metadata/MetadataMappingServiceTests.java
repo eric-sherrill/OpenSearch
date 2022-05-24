@@ -39,7 +39,6 @@ import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.index.Index;
 import org.opensearch.index.IndexService;
-import org.opensearch.index.mapper.MapperService;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.test.OpenSearchSingleNodeTestCase;
 import org.opensearch.test.InternalSettingsPlugin;
@@ -58,15 +57,16 @@ public class MetadataMappingServiceTests extends OpenSearchSingleNodeTestCase {
     }
 
     public void testMappingClusterStateUpdateDoesntChangeExistingIndices() throws Exception {
-        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test").addMapping("type"));
-        final CompressedXContent currentMapping = indexService.mapperService().documentMapper("type").mappingSource();
+        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test").setMapping());
+        final CompressedXContent currentMapping = indexService.mapperService().documentMapper().mappingSource();
 
         final MetadataMappingService mappingService = getInstanceFromNode(MetadataMappingService.class);
         final ClusterService clusterService = getInstanceFromNode(ClusterService.class);
         // TODO - it will be nice to get a random mapping generator
-        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest().type("type");
+        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest(
+            "{ \"properties\": { \"field\": { \"type\": \"text\" }}}"
+        );
         request.indices(new Index[] { indexService.index() });
-        request.source("{ \"properties\": { \"field\": { \"type\": \"text\" }}}");
         final ClusterStateTaskExecutor.ClusterTasksResult<PutMappingClusterStateUpdateRequest> result = mappingService.putMappingExecutor
             .execute(clusterService.state(), Collections.singletonList(request));
         // the task completed successfully
@@ -74,20 +74,21 @@ public class MetadataMappingServiceTests extends OpenSearchSingleNodeTestCase {
         assertTrue(result.executionResults.values().iterator().next().isSuccess());
         // the task really was a mapping update
         assertThat(
-            indexService.mapperService().documentMapper("type").mappingSource(),
-            not(equalTo(result.resultingState.metadata().index("test").getMappings().get("type").source()))
+            indexService.mapperService().documentMapper().mappingSource(),
+            not(equalTo(result.resultingState.metadata().index("test").mapping().source()))
         );
         // since we never committed the cluster state update, the in-memory state is unchanged
-        assertThat(indexService.mapperService().documentMapper("type").mappingSource(), equalTo(currentMapping));
+        assertThat(indexService.mapperService().documentMapper().mappingSource(), equalTo(currentMapping));
     }
 
     public void testClusterStateIsNotChangedWithIdenticalMappings() throws Exception {
-        createIndex("test", client().admin().indices().prepareCreate("test").addMapping("type"));
+        createIndex("test", client().admin().indices().prepareCreate("test"));
 
         final MetadataMappingService mappingService = getInstanceFromNode(MetadataMappingService.class);
         final ClusterService clusterService = getInstanceFromNode(ClusterService.class);
-        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest().type("type");
-        request.source("{ \"properties\" { \"field\": { \"type\": \"text\" }}}");
+        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest(
+            "{ \"properties\" { \"field\": { \"type\": \"text\" }}}"
+        );
         ClusterState result = mappingService.putMappingExecutor.execute(
             clusterService.state(),
             Collections.singletonList(request)
@@ -101,13 +102,14 @@ public class MetadataMappingServiceTests extends OpenSearchSingleNodeTestCase {
     }
 
     public void testMappingVersion() throws Exception {
-        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test").addMapping("type"));
+        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test"));
         final long previousVersion = indexService.getMetadata().getMappingVersion();
         final MetadataMappingService mappingService = getInstanceFromNode(MetadataMappingService.class);
         final ClusterService clusterService = getInstanceFromNode(ClusterService.class);
-        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest().type("type");
+        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest(
+            "{ \"properties\": { \"field\": { \"type\": \"text\" }}}"
+        );
         request.indices(new Index[] { indexService.index() });
-        request.source("{ \"properties\": { \"field\": { \"type\": \"text\" }}}");
         final ClusterStateTaskExecutor.ClusterTasksResult<PutMappingClusterStateUpdateRequest> result = mappingService.putMappingExecutor
             .execute(clusterService.state(), Collections.singletonList(request));
         assertThat(result.executionResults.size(), equalTo(1));
@@ -116,38 +118,16 @@ public class MetadataMappingServiceTests extends OpenSearchSingleNodeTestCase {
     }
 
     public void testMappingVersionUnchanged() throws Exception {
-        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test").addMapping("type"));
+        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test").setMapping());
         final long previousVersion = indexService.getMetadata().getMappingVersion();
         final MetadataMappingService mappingService = getInstanceFromNode(MetadataMappingService.class);
         final ClusterService clusterService = getInstanceFromNode(ClusterService.class);
-        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest().type("type");
+        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest("{ \"properties\": {}}");
         request.indices(new Index[] { indexService.index() });
-        request.source("{ \"properties\": {}}");
         final ClusterStateTaskExecutor.ClusterTasksResult<PutMappingClusterStateUpdateRequest> result = mappingService.putMappingExecutor
             .execute(clusterService.state(), Collections.singletonList(request));
         assertThat(result.executionResults.size(), equalTo(1));
         assertTrue(result.executionResults.values().iterator().next().isSuccess());
         assertThat(result.resultingState.metadata().index("test").getMappingVersion(), equalTo(previousVersion));
-    }
-
-    public void testMappingUpdateAccepts_docAsType() throws Exception {
-        final IndexService indexService = createIndex("test", client().admin().indices().prepareCreate("test").addMapping("my_type"));
-        final MetadataMappingService mappingService = getInstanceFromNode(MetadataMappingService.class);
-        final ClusterService clusterService = getInstanceFromNode(ClusterService.class);
-        final PutMappingClusterStateUpdateRequest request = new PutMappingClusterStateUpdateRequest().type(
-            MapperService.SINGLE_MAPPING_NAME
-        );
-        request.indices(new Index[] { indexService.index() });
-        request.source("{ \"properties\": { \"foo\": { \"type\": \"keyword\" } }}");
-        final ClusterStateTaskExecutor.ClusterTasksResult<PutMappingClusterStateUpdateRequest> result = mappingService.putMappingExecutor
-            .execute(clusterService.state(), Collections.singletonList(request));
-        assertThat(result.executionResults.size(), equalTo(1));
-        assertTrue(result.executionResults.values().iterator().next().isSuccess());
-        MappingMetadata mappingMetadata = result.resultingState.metadata().index("test").mapping();
-        assertEquals("my_type", mappingMetadata.type());
-        assertEquals(
-            Collections.singletonMap("properties", Collections.singletonMap("foo", Collections.singletonMap("type", "keyword"))),
-            mappingMetadata.sourceAsMap()
-        );
     }
 }

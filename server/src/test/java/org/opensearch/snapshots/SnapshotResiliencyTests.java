@@ -196,6 +196,7 @@ import org.opensearch.script.ScriptService;
 import org.opensearch.search.SearchService;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.search.fetch.FetchPhase;
+import org.opensearch.search.query.QueryPhase;
 import org.opensearch.snapshots.mockstore.MockEventuallyConsistentRepository;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.disruption.DisruptableMockTransport;
@@ -1445,8 +1446,8 @@ public class SnapshotResiliencyTests extends OpenSearchTestCase {
                 .put(PATH_HOME_SETTING.getKey(), tempDir.resolve(nodeName).toAbsolutePath())
                 .put(Environment.PATH_REPO_SETTING.getKey(), tempDir.resolve("repo").toAbsolutePath())
                 .putList(
-                    ClusterBootstrapService.INITIAL_MASTER_NODES_SETTING.getKey(),
-                    ClusterBootstrapService.INITIAL_MASTER_NODES_SETTING.get(Settings.EMPTY)
+                    ClusterBootstrapService.INITIAL_CLUSTER_MANAGER_NODES_SETTING.getKey(),
+                    ClusterBootstrapService.INITIAL_CLUSTER_MANAGER_NODES_SETTING.get(Settings.EMPTY)
                 )
                 .put(MappingUpdatedAction.INDICES_MAX_IN_FLIGHT_UPDATES_SETTING.getKey(), 1000) // o.w. some tests might block
                 .build()
@@ -1500,7 +1501,7 @@ public class SnapshotResiliencyTests extends OpenSearchTestCase {
         }
 
         private TestClusterNode newMasterNode(String nodeName) throws IOException {
-            return newNode(nodeName, DiscoveryNodeRole.MASTER_ROLE);
+            return newNode(nodeName, DiscoveryNodeRole.CLUSTER_MANAGER_ROLE);
         }
 
         private TestClusterNode newDataNode(String nodeName) throws IOException {
@@ -1862,7 +1863,8 @@ public class SnapshotResiliencyTests extends OpenSearchTestCase {
                     RetentionLeaseSyncer.EMPTY
                 );
                 Map<ActionType, TransportAction> actions = new HashMap<>();
-                final ShardLimitValidator shardLimitValidator = new ShardLimitValidator(settings, clusterService);
+                final SystemIndices systemIndices = new SystemIndices(emptyMap());
+                final ShardLimitValidator shardLimitValidator = new ShardLimitValidator(settings, clusterService, systemIndices);
                 final MetadataCreateIndexService metadataCreateIndexService = new MetadataCreateIndexService(
                     settings,
                     clusterService,
@@ -1874,7 +1876,7 @@ public class SnapshotResiliencyTests extends OpenSearchTestCase {
                     indexScopedSettings,
                     threadPool,
                     namedXContentRegistry,
-                    new SystemIndices(emptyMap()),
+                    systemIndices,
                     false
                 );
                 actions.put(
@@ -1977,9 +1979,11 @@ public class SnapshotResiliencyTests extends OpenSearchTestCase {
                     threadPool,
                     scriptService,
                     bigArrays,
+                    new QueryPhase(),
                     new FetchPhase(Collections.emptyList()),
                     responseCollectorService,
-                    new NoneCircuitBreakerService()
+                    new NoneCircuitBreakerService(),
+                    null
                 );
                 SearchPhaseController searchPhaseController = new SearchPhaseController(
                     writableRegistry(),

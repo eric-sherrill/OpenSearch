@@ -71,6 +71,8 @@ import java.util.stream.IntStream;
 
 /**
  * A filter for a field based on several terms matching on any of them.
+ *
+ * @opensearch.internal
  */
 public class TermsQueryBuilder extends AbstractQueryBuilder<TermsQueryBuilder> {
     public static final String NAME = "terms";
@@ -223,10 +225,6 @@ public class TermsQueryBuilder extends AbstractQueryBuilder<TermsQueryBuilder> {
 
     public TermsLookup termsLookup() {
         return this.termsLookup;
-    }
-
-    public boolean isTypeless() {
-        return termsLookup == null || termsLookup.type() == null;
     }
 
     private static final Set<Class<? extends Number>> INTEGER_TYPES = new HashSet<>(

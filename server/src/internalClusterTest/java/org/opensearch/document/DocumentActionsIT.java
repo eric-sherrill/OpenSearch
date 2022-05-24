@@ -57,7 +57,7 @@ import static org.opensearch.client.Requests.clearIndicesCacheRequest;
 import static org.opensearch.client.Requests.getRequest;
 import static org.opensearch.client.Requests.indexRequest;
 import static org.opensearch.client.Requests.refreshRequest;
-import static org.opensearch.index.query.QueryBuilders.termQuery;
+import static org.opensearch.index.query.QueryBuilders.matchAllQuery;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertNoFailures;
 
 import static org.hamcrest.Matchers.equalTo;
@@ -68,7 +68,7 @@ import static org.hamcrest.Matchers.nullValue;
  */
 public class DocumentActionsIT extends OpenSearchIntegTestCase {
     protected void createIndex() {
-        OpenSearchAssertions.assertAcked(prepareCreate(getConcreteIndexName()).addMapping("type1", "name", "type=keyword,store=true"));
+        OpenSearchAssertions.assertAcked(prepareCreate(getConcreteIndexName()).setMapping("name", "type=keyword,store=true"));
     }
 
     protected String getConcreteIndexName() {
@@ -180,11 +180,7 @@ public class DocumentActionsIT extends OpenSearchIntegTestCase {
         // check count
         for (int i = 0; i < 5; i++) {
             // test successful
-            SearchResponse countResponse = client().prepareSearch("test")
-                .setSize(0)
-                .setQuery(termQuery("_type", "type1"))
-                .execute()
-                .actionGet();
+            SearchResponse countResponse = client().prepareSearch("test").setSize(0).setQuery(matchAllQuery()).execute().actionGet();
             assertNoFailures(countResponse);
             assertThat(countResponse.getHits().getTotalHits().value, equalTo(2L));
             assertThat(countResponse.getSuccessfulShards(), equalTo(numShards.numPrimaries));

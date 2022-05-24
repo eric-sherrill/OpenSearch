@@ -248,7 +248,7 @@ public class NodeJoinTests extends OpenSearchTestCase {
     protected DiscoveryNode newNode(int i, boolean master) {
         final Set<DiscoveryNodeRole> roles;
         if (master) {
-            roles = singleton(DiscoveryNodeRole.MASTER_ROLE);
+            roles = singleton(DiscoveryNodeRole.CLUSTER_MANAGER_ROLE);
         } else {
             roles = Collections.emptySet();
         }
@@ -329,17 +329,17 @@ public class NodeJoinTests extends OpenSearchTestCase {
             () -> new StatusInfo(HEALTHY, "healthy-info")
         );
         assertFalse(isLocalNodeElectedMaster());
-        assertNull(coordinator.getStateForMasterService().nodes().getMasterNodeId());
+        assertNull(coordinator.getStateForClusterManagerService().nodes().getMasterNodeId());
         long newTerm = initialTerm + randomLongBetween(1, 10);
         SimpleFuture fut = joinNodeAsync(
             new JoinRequest(node1, newTerm, Optional.of(new Join(node1, node0, newTerm, initialTerm, initialVersion)))
         );
         assertEquals(Coordinator.Mode.LEADER, coordinator.getMode());
-        assertNull(coordinator.getStateForMasterService().nodes().getMasterNodeId());
+        assertNull(coordinator.getStateForClusterManagerService().nodes().getMasterNodeId());
         deterministicTaskQueue.runAllRunnableTasks();
         assertTrue(fut.isDone());
         assertTrue(isLocalNodeElectedMaster());
-        assertTrue(coordinator.getStateForMasterService().nodes().isLocalNodeElectedMaster());
+        assertTrue(coordinator.getStateForClusterManagerService().nodes().isLocalNodeElectedMaster());
     }
 
     public void testJoinWithHigherTermButBetterStateGetsRejected() {
@@ -492,7 +492,7 @@ public class NodeJoinTests extends OpenSearchTestCase {
             "newNodeId",
             buildNewFakeTransportAddress(),
             emptyMap(),
-            singleton(DiscoveryNodeRole.MASTER_ROLE),
+            singleton(DiscoveryNodeRole.CLUSTER_MANAGER_ROLE),
             Version.CURRENT
         );
         long newTerm = initialTerm + randomLongBetween(1, 10);
@@ -740,6 +740,28 @@ public class NodeJoinTests extends OpenSearchTestCase {
             assertTrue(successfulNode + " joined cluster", clusterStateHasNode(successfulNode));
             assertFalse(successfulNode + " voted for master", coordinator.missingJoinVoteFrom(successfulNode));
         }
+    }
+
+    // Validate the deprecated MASTER_ROLE can join another node and elected as leader.
+    public void testJoinElectedLeaderWithDeprecatedMasterRole() {
+        final Set<DiscoveryNodeRole> roles = singleton(DiscoveryNodeRole.MASTER_ROLE);
+        DiscoveryNode node0 = new DiscoveryNode("master0", "0", buildNewFakeTransportAddress(), emptyMap(), roles, Version.CURRENT);
+        DiscoveryNode node1 = new DiscoveryNode("master1", "1", buildNewFakeTransportAddress(), emptyMap(), roles, Version.CURRENT);
+        long initialTerm = 1;
+        long initialVersion = 1;
+        setupFakeMasterServiceAndCoordinator(
+            initialTerm,
+            initialState(node0, initialTerm, initialVersion, VotingConfiguration.of(node0)),
+            () -> new StatusInfo(HEALTHY, "healthy-info")
+        );
+        assertFalse(isLocalNodeElectedMaster());
+        long newTerm = 2;
+        joinNodeAndRun(new JoinRequest(node0, newTerm, Optional.of(new Join(node0, node0, newTerm, initialTerm, initialVersion))));
+        assertTrue(isLocalNodeElectedMaster());
+        assertFalse(clusterStateHasNode(node1));
+        joinNodeAndRun(new JoinRequest(node1, newTerm, Optional.of(new Join(node1, node0, newTerm, initialTerm, initialVersion))));
+        assertTrue(isLocalNodeElectedMaster());
+        assertTrue(clusterStateHasNode(node1));
     }
 
     private boolean isLocalNodeElectedMaster() {

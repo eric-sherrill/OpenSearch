@@ -38,7 +38,6 @@ import org.opensearch.index.mapper.IdFieldMapper;
 import org.opensearch.index.mapper.IndexFieldMapper;
 import org.opensearch.index.mapper.RoutingFieldMapper;
 import org.opensearch.index.mapper.SourceFieldMapper;
-import org.opensearch.index.mapper.TypeFieldMapper;
 import org.opensearch.index.mapper.VersionFieldMapper;
 import org.opensearch.script.TemplateScript;
 
@@ -60,6 +59,8 @@ import java.util.function.BiConsumer;
 
 /**
  * Represents a single document being captured before indexing and holds the source and metadata (like id, type and index).
+ *
+ * @opensearch.internal
  */
 public final class IngestDocument {
 
@@ -844,9 +845,13 @@ public final class IngestDocument {
         return "IngestDocument{" + " sourceAndMetadata=" + sourceAndMetadata + ", ingestMetadata=" + ingestMetadata + '}';
     }
 
+    /**
+     * The ingest metadata.
+     *
+     * @opensearch.internal
+     */
     public enum Metadata {
         INDEX(IndexFieldMapper.NAME),
-        TYPE(TypeFieldMapper.NAME),
         ID(IdFieldMapper.NAME),
         ROUTING(RoutingFieldMapper.NAME),
         VERSION(VersionFieldMapper.NAME),

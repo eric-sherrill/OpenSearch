@@ -64,14 +64,14 @@ if (!isEclipse) {
   }
 
   compileJava11Java {
-    sourceCompatibility = 11
-    targetCompatibility = 11
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
   }
 
   tasks.named('forbiddenApisJava11').configure {
     doFirst {
       if (BuildParams.runtimeJavaVersion < JavaVersion.VERSION_11) {
-        targetCompatibility = JavaVersion.VERSION_11.getMajorVersion()
+        targetCompatibility = JavaVersion.VERSION_11
       }
     }
   }
@@ -97,7 +97,7 @@ dependencies {
 
   // lucene
   api "org.apache.lucene:lucene-core:${versions.lucene}"
-  api "org.apache.lucene:lucene-analyzers-common:${versions.lucene}"
+  api "org.apache.lucene:lucene-analysis-common:${versions.lucene}"
   api "org.apache.lucene:lucene-backward-codecs:${versions.lucene}"
   api "org.apache.lucene:lucene-grouping:${versions.lucene}"
   api "org.apache.lucene:lucene-highlighter:${versions.lucene}"
@@ -121,7 +121,7 @@ dependencies {
   // percentiles aggregation
   api 'com.tdunning:t-digest:3.2'
   // precentil ranks aggregation
-  api 'org.hdrhistogram:HdrHistogram:2.1.9'
+  api 'org.hdrhistogram:HdrHistogram:2.1.12'
 
   // lucene spatial
   api "org.locationtech.spatial4j:spatial4j:${versions.spatial4j}", optional
@@ -182,7 +182,7 @@ tasks.named("testingConventions").configure {
     naming.clear()
     naming {
         Tests {
-            baseClass "org.apache.lucene.util.LuceneTestCase"
+            baseClass "org.apache.lucene.tests.util.LuceneTestCase"
         }
         IT {
             baseClass "org.opensearch.test.OpenSearchIntegTestCase"
@@ -317,10 +317,6 @@ tasks.named("thirdPartyAudit").configure {
             'com.google.common.geometry.S2$Metric',
             'com.google.common.geometry.S2LatLng'
     )
-
-    if (BuildParams.runtimeJavaVersion > JavaVersion.VERSION_1_8) {
-        ignoreMissingClasses 'javax.xml.bind.DatatypeConverter'
-    }
 }
 
 tasks.named("dependencyLicenses").configure {

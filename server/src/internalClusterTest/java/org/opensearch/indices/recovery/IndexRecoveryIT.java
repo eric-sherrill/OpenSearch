@@ -33,8 +33,8 @@
 package org.opensearch.indices.recovery;
 
 import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.util.SetOnce;
-
 import org.opensearch.OpenSearchException;
 import org.opensearch.Version;
 import org.opensearch.action.admin.cluster.health.ClusterHealthResponse;
@@ -75,6 +75,7 @@ import org.opensearch.common.Priority;
 import org.opensearch.common.Strings;
 import org.opensearch.common.breaker.CircuitBreaker;
 import org.opensearch.common.breaker.CircuitBreakingException;
+import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.ByteSizeUnit;
 import org.opensearch.common.unit.ByteSizeValue;
@@ -88,7 +89,6 @@ import org.opensearch.index.IndexSettings;
 import org.opensearch.index.MockEngineFactoryPlugin;
 import org.opensearch.index.analysis.AbstractTokenFilterFactory;
 import org.opensearch.index.analysis.TokenFilterFactory;
-import org.opensearch.index.engine.Engine;
 import org.opensearch.index.mapper.MapperParsingException;
 import org.opensearch.index.recovery.RecoveryStats;
 import org.opensearch.index.seqno.ReplicationTracker;
@@ -101,6 +101,7 @@ import org.opensearch.index.store.StoreStats;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.indices.NodeIndicesStats;
 import org.opensearch.indices.analysis.AnalysisModule;
+import org.opensearch.indices.replication.common.ReplicationLuceneIndex;
 import org.opensearch.indices.recovery.RecoveryState.Stage;
 import org.opensearch.node.NodeClosedException;
 import org.opensearch.node.RecoverySettingsChunkSizePlugin;
@@ -114,11 +115,11 @@ import org.opensearch.snapshots.Snapshot;
 import org.opensearch.snapshots.SnapshotState;
 import org.opensearch.tasks.Task;
 import org.opensearch.test.BackgroundIndexer;
+import org.opensearch.test.InternalSettingsPlugin;
+import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.OpenSearchIntegTestCase.ClusterScope;
 import org.opensearch.test.OpenSearchIntegTestCase.Scope;
-import org.opensearch.test.InternalSettingsPlugin;
-import org.opensearch.test.InternalTestCluster;
 import org.opensearch.test.engine.MockEngineSupport;
 import org.opensearch.test.store.MockFSIndexStore;
 import org.opensearch.test.transport.MockTransportService;
@@ -151,12 +152,6 @@ import java.util.stream.StreamSupport;
 
 import static java.util.Collections.singletonMap;
 import static java.util.stream.Collectors.toList;
-import static org.opensearch.action.DocWriteResponse.Result.CREATED;
-import static org.opensearch.action.DocWriteResponse.Result.UPDATED;
-import static org.opensearch.node.RecoverySettingsChunkSizePlugin.CHUNK_SIZE_SETTING;
-import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
-import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertHitCount;
-
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.everyItem;
@@ -167,6 +162,11 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.isOneOf;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.hamcrest.Matchers.not;
+import static org.opensearch.action.DocWriteResponse.Result.CREATED;
+import static org.opensearch.action.DocWriteResponse.Result.UPDATED;
+import static org.opensearch.node.RecoverySettingsChunkSizePlugin.CHUNK_SIZE_SETTING;
+import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
+import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertHitCount;
 
 @ClusterScope(scope = Scope.TEST, numDataNodes = 0)
 public class IndexRecoveryIT extends OpenSearchIntegTestCase {
@@ -837,7 +837,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
         return client().admin().indices().prepareStats(name).execute().actionGet();
     }
 
-    private void validateIndexRecoveryState(RecoveryState.Index indexState) {
+    private void validateIndexRecoveryState(ReplicationLuceneIndex indexState) {
         assertThat(indexState.time(), greaterThanOrEqualTo(0L));
         assertThat(indexState.recoveredFilesPercent(), greaterThanOrEqualTo(0.0f));
         assertThat(indexState.recoveredFilesPercent(), lessThanOrEqualTo(100.0f));
@@ -852,7 +852,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
             .put(NodeConnectionsService.CLUSTER_NODE_RECONNECT_INTERVAL_SETTING.getKey(), "500ms")
             .put(RecoverySettings.INDICES_RECOVERY_INTERNAL_ACTION_TIMEOUT_SETTING.getKey(), "10s")
             .build();
-        // start a master node
+        // start a cluster-manager node
         internalCluster().startNode(nodeSettings);
 
         final String blueNodeName = internalCluster().startNode(
@@ -1054,7 +1054,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
             .put(RecoverySettings.INDICES_RECOVERY_INTERNAL_ACTION_TIMEOUT_SETTING.getKey(), "1s")
             .put(NodeConnectionsService.CLUSTER_NODE_RECONNECT_INTERVAL_SETTING.getKey(), "1s")
             .build();
-        // start a master node
+        // start a cluster-manager node
         internalCluster().startNode(nodeSettings);
 
         final String blueNodeName = internalCluster().startNode(
@@ -1211,8 +1211,8 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
             )
             .build();
         TimeValue disconnectAfterDelay = TimeValue.timeValueMillis(randomIntBetween(0, 100));
-        // start a master node
-        String masterNodeName = internalCluster().startMasterOnlyNode(nodeSettings);
+        // start a cluster-manager node
+        String clusterManagerNodeName = internalCluster().startClusterManagerOnlyNode(nodeSettings);
 
         final String blueNodeName = internalCluster().startNode(
             Settings.builder().put("node.attr.color", "blue").put(nodeSettings).build()
@@ -1239,9 +1239,9 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
         ensureSearchable(indexName);
         assertHitCount(client().prepareSearch(indexName).get(), numDocs);
 
-        MockTransportService masterTransportService = (MockTransportService) internalCluster().getInstance(
+        MockTransportService clusterManagerTransportService = (MockTransportService) internalCluster().getInstance(
             TransportService.class,
-            masterNodeName
+            clusterManagerNodeName
         );
         MockTransportService blueMockTransportService = (MockTransportService) internalCluster().getInstance(
             TransportService.class,
@@ -1312,7 +1312,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
         });
 
         for (MockTransportService mockTransportService : Arrays.asList(redMockTransportService, blueMockTransportService)) {
-            mockTransportService.addSendBehavior(masterTransportService, (connection, requestId, action, request, options) -> {
+            mockTransportService.addSendBehavior(clusterManagerTransportService, (connection, requestId, action, request, options) -> {
                 logger.info("--> sending request {} on {}", action, connection.getNode());
                 if ((primaryRelocation && finalized.get()) == false) {
                     assertNotEquals(action, ShardStateAction.SHARD_FAILED_ACTION_NAME);
@@ -1434,12 +1434,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
                 .put("index.number_of_shards", 1)
                 .build()
         );
-        client().admin()
-            .indices()
-            .preparePutMapping("test")
-            .setType("_doc")
-            .setSource("test_field", "type=text,analyzer=test_analyzer")
-            .get();
+        client().admin().indices().preparePutMapping("test").setSource("test_field", "type=text,analyzer=test_analyzer").get();
         int numDocs = between(1, 10);
         for (int i = 0; i < numDocs; i++) {
             client().prepareIndex("test")
@@ -1471,8 +1466,8 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
         assertHitCount(client().prepareSearch().get(), numDocs);
     }
 
-    /** Makes sure the new master does not repeatedly fetch index metadata from recovering replicas */
-    public void testOngoingRecoveryAndMasterFailOver() throws Exception {
+    /** Makes sure the new cluster-manager does not repeatedly fetch index metadata from recovering replicas */
+    public void testOngoingRecoveryAndClusterManagerFailOver() throws Exception {
         String indexName = "test";
         internalCluster().startNodes(2);
         String nodeWithPrimary = internalCluster().startDataOnlyNode();
@@ -1604,9 +1599,9 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
             .getShardOrNull(new ShardId(resolveIndex(indexName), 0));
         final long lastSyncedGlobalCheckpoint = shard.getLastSyncedGlobalCheckpoint();
         final long localCheckpointOfSafeCommit;
-        try (Engine.IndexCommitRef safeCommitRef = shard.acquireSafeIndexCommit()) {
+        try (GatedCloseable<IndexCommit> wrappedSafeCommit = shard.acquireSafeIndexCommit()) {
             localCheckpointOfSafeCommit = SequenceNumbers.loadSeqNoInfoFromLuceneCommit(
-                safeCommitRef.getIndexCommit().getUserData().entrySet()
+                wrappedSafeCommit.get().getUserData().entrySet()
             ).localCheckpoint;
         }
         final long maxSeqNo = shard.seqNoStats().getMaxSeqNo();
@@ -2090,7 +2085,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
     }
 
     public void testAllocateEmptyPrimaryResetsGlobalCheckpoint() throws Exception {
-        internalCluster().startMasterOnlyNode(Settings.EMPTY);
+        internalCluster().startClusterManagerOnlyNode(Settings.EMPTY);
         final List<String> dataNodes = internalCluster().startDataOnlyNodes(2);
         final Settings randomNodeDataPathSettings = internalCluster().dataPathSettings(randomFrom(dataNodes));
         final String indexName = "test";
@@ -2190,7 +2185,7 @@ public class IndexRecoveryIT extends OpenSearchIntegTestCase {
     }
 
     public void testCancelRecoveryWithAutoExpandReplicas() throws Exception {
-        internalCluster().startMasterOnlyNode();
+        internalCluster().startClusterManagerOnlyNode();
         assertAcked(
             client().admin()
                 .indices()

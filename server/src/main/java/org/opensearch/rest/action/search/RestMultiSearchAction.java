@@ -66,6 +66,11 @@ import static java.util.Collections.unmodifiableList;
 import static org.opensearch.rest.RestRequest.Method.GET;
 import static org.opensearch.rest.RestRequest.Method.POST;
 
+/**
+ * Transport action to perform a multi search
+ *
+ * @opensearch.api
+ */
 public class RestMultiSearchAction extends BaseRestHandler {
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(RestMultiSearchAction.class);
 
@@ -91,10 +96,7 @@ public class RestMultiSearchAction extends BaseRestHandler {
                 new Route(GET, "/_msearch"),
                 new Route(POST, "/_msearch"),
                 new Route(GET, "/{index}/_msearch"),
-                new Route(POST, "/{index}/_msearch"),
-                // Deprecated typed endpoints.
-                new Route(GET, "/{index}/{type}/_msearch"),
-                new Route(POST, "/{index}/{type}/_msearch")
+                new Route(POST, "/{index}/_msearch")
             )
         );
     }

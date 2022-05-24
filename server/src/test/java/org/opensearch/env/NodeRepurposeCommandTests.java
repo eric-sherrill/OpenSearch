@@ -105,7 +105,7 @@ public class NodeRepurposeCommandTests extends OpenSearchTestCase {
         dataNoMasterSettings = nonMasterNode(dataMasterSettings);
         noDataNoMasterSettings = removeRoles(
             dataMasterSettings,
-            Collections.unmodifiableSet(new HashSet<>(Arrays.asList(DiscoveryNodeRole.DATA_ROLE, DiscoveryNodeRole.MASTER_ROLE)))
+            Collections.unmodifiableSet(new HashSet<>(Arrays.asList(DiscoveryNodeRole.DATA_ROLE, DiscoveryNodeRole.CLUSTER_MANAGER_ROLE)))
         );
 
         noDataMasterSettings = masterNode(nonDataNode(dataMasterSettings));
@@ -160,7 +160,7 @@ public class NodeRepurposeCommandTests extends OpenSearchTestCase {
         boolean hasClusterState = randomBoolean();
         createIndexDataFiles(dataMasterSettings, shardCount, hasClusterState);
 
-        String messageText = NodeRepurposeCommand.noMasterMessage(1, environment.dataFiles().length * shardCount, 0);
+        String messageText = NodeRepurposeCommand.noClusterManagerMessage(1, environment.dataFiles().length * shardCount, 0);
 
         Matcher<String> outputMatcher = allOf(
             containsString(messageText),

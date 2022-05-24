@@ -51,14 +51,13 @@ import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
-import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.SetOnce;
 import org.opensearch.ExceptionsHelper;
 import org.opensearch.action.index.IndexRequest;
-import org.opensearch.common.CheckedRunnable;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.collect.ImmutableOpenMap;
+import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.common.logging.Loggers;
@@ -72,7 +71,6 @@ import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.concurrent.ReleasableLock;
 import org.opensearch.index.VersionType;
-import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.mapper.Mapping;
 import org.opensearch.index.mapper.ParseContext.Document;
 import org.opensearch.index.mapper.ParsedDocument;
@@ -114,6 +112,11 @@ import java.util.stream.Stream;
 import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_PRIMARY_TERM;
 import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
 
+/**
+ * Base OpenSearch Engine class
+ *
+ * @opensearch.internal
+ */
 public abstract class Engine implements Closeable {
 
     public static final String SYNC_COMMIT_ID = "sync_id";  // TODO: remove sync_id in 3.0
@@ -240,6 +243,8 @@ public abstract class Engine implements Closeable {
      * A throttling class that can be activated, causing the
      * {@code acquireThrottle} method to block on a lock when throttling
      * is enabled
+     *
+     * @opensearch.internal
      */
     protected static final class IndexThrottle {
         private final CounterMetric throttleTimeMillisMetric = new CounterMetric();
@@ -314,7 +319,11 @@ public abstract class Engine implements Closeable {
      */
     public abstract void trimOperationsFromTranslog(long belowTerm, long aboveSeqNo) throws EngineException;
 
-    /** A Lock implementation that always allows the lock to be acquired */
+    /**
+     * A Lock implementation that always allows the lock to be acquired
+     *
+     * @opensearch.internal
+     */
     protected static final class NoOpLock implements Lock {
 
         @Override
@@ -368,6 +377,8 @@ public abstract class Engine implements Closeable {
      * Base class for index and delete operation results
      * Holds result meta data (e.g. translog location, updated version)
      * for an executed write {@link Operation}
+     *
+     * @opensearch.internal
      **/
     public abstract static class Result {
         private final Operation.TYPE operationType;
@@ -481,6 +492,11 @@ public abstract class Engine implements Closeable {
             freeze.set(true);
         }
 
+        /**
+         * Type of the result
+         *
+         * @opensearch.internal
+         */
         public enum Type {
             SUCCESS,
             FAILURE,
@@ -488,6 +504,11 @@ public abstract class Engine implements Closeable {
         }
     }
 
+    /**
+     * Index result
+     *
+     * @opensearch.internal
+     */
     public static class IndexResult extends Result {
 
         private final boolean created;
@@ -520,6 +541,11 @@ public abstract class Engine implements Closeable {
 
     }
 
+    /**
+     * The delete result
+     *
+     * @opensearch.internal
+     */
     public static class DeleteResult extends Result {
 
         private final boolean found;
@@ -552,6 +578,11 @@ public abstract class Engine implements Closeable {
 
     }
 
+    /**
+     * A noop result
+     *
+     * @opensearch.internal
+     */
     public static class NoOpResult extends Result {
 
         NoOpResult(long term, long seqNo) {
@@ -710,6 +741,11 @@ public abstract class Engine implements Closeable {
         return true;
     }
 
+    /**
+     * Scope of the searcher
+     *
+     * @opensearch.internal
+     */
     public enum SearcherScope {
         EXTERNAL,
         INTERNAL
@@ -738,11 +774,20 @@ public abstract class Engine implements Closeable {
      */
     public abstract Translog.Snapshot newChangesSnapshot(
         String source,
-        MapperService mapperService,
         long fromSeqNo,
         long toSeqNo,
-        boolean requiredFullRange
+        boolean requiredFullRange,
+        boolean accurateCount
     ) throws IOException;
+
+    /**
+     * Counts the number of history operations in the given sequence number range
+     * @param source       source of the request
+     * @param fromSeqNo    from sequence number; included
+     * @param toSeqNumber  to sequence number; included
+     * @return             number of history operations
+     */
+    public abstract int countNumberOfHistoryOperations(String source, long fromSeqNo, long toSeqNumber) throws IOException;
 
     public abstract boolean hasCompleteOperationHistory(String reason, long startingSeqNo);
 
@@ -989,9 +1034,6 @@ public abstract class Engine implements Closeable {
             logger.trace(() -> new ParameterizedMessage("failed to get size for [{}]", info.info.name), e);
         }
         segment.segmentSort = info.info.getIndexSort();
-        if (verbose) {
-            segment.ramTree = Accountables.namedAccountable("root", segmentReader);
-        }
         segment.attributes = info.info.getAttributes();
         // TODO: add more fine grained mem stats values to per segment info here
         segments.put(info.info.name, segment);
@@ -1108,12 +1150,12 @@ public abstract class Engine implements Closeable {
      *
      * @param flushFirst indicates whether the engine should flush before returning the snapshot
      */
-    public abstract IndexCommitRef acquireLastIndexCommit(boolean flushFirst) throws EngineException;
+    public abstract GatedCloseable<IndexCommit> acquireLastIndexCommit(boolean flushFirst) throws EngineException;
 
     /**
      * Snapshots the most recent safe index commit from the engine.
      */
-    public abstract IndexCommitRef acquireSafeIndexCommit() throws EngineException;
+    public abstract GatedCloseable<IndexCommit> acquireSafeIndexCommit() throws EngineException;
 
     /**
      * @return a summary of the contents of the current safe commit
@@ -1219,6 +1261,11 @@ public abstract class Engine implements Closeable {
         return false;
     }
 
+    /**
+     * Event listener for the engine
+     *
+     * @opensearch.internal
+     */
     public interface EventListener {
         /**
          * Called when a fatal exception occurred
@@ -1226,6 +1273,11 @@ public abstract class Engine implements Closeable {
         default void onFailedEngine(String reason, @Nullable Exception e) {}
     }
 
+    /**
+     * Supplier for the searcher
+     *
+     * @opensearch.internal
+     */
     public abstract static class SearcherSupplier implements Releasable {
         private final Function<Searcher, Searcher> wrapper;
         private final AtomicBoolean released = new AtomicBoolean(false);
@@ -1256,6 +1308,11 @@ public abstract class Engine implements Closeable {
         protected abstract Searcher acquireSearcherInternal(String source);
     }
 
+    /**
+     * The engine searcher
+     *
+     * @opensearch.internal
+     */
     public static final class Searcher extends IndexSearcher implements Releasable {
         private final String source;
         private final Closeable onClose;
@@ -1303,9 +1360,18 @@ public abstract class Engine implements Closeable {
         }
     }
 
+    /**
+     * Base operation class
+     *
+     * @opensearch.internal
+     */
     public abstract static class Operation {
 
-        /** type of operation (index, delete), subclasses use static types */
+        /**
+         * type of operation (index, delete), subclasses use static types
+         *
+         * @opensearch.internal
+         */
         public enum TYPE {
             INDEX,
             DELETE,
@@ -1340,6 +1406,11 @@ public abstract class Engine implements Closeable {
             this.startTime = startTime;
         }
 
+        /**
+         * Origin of the operation
+         *
+         * @opensearch.internal
+         */
         public enum Origin {
             PRIMARY,
             REPLICA,
@@ -1389,13 +1460,16 @@ public abstract class Engine implements Closeable {
             return this.startTime;
         }
 
-        public abstract String type();
-
         abstract String id();
 
         public abstract TYPE operationType();
     }
 
+    /**
+     * Index operation
+     *
+     * @opensearch.internal
+     */
     public static class Index extends Operation {
 
         private final ParsedDocument doc;
@@ -1457,11 +1531,6 @@ public abstract class Engine implements Closeable {
         }
 
         @Override
-        public String type() {
-            return this.doc.type();
-        }
-
-        @Override
         public String id() {
             return this.doc.id();
         }
@@ -1485,7 +1554,7 @@ public abstract class Engine implements Closeable {
 
         @Override
         public int estimatedSizeInBytes() {
-            return (id().length() + type().length()) * 2 + source().length() + 12;
+            return id().length() * 2 + source().length() + 12;
         }
 
         /**
@@ -1514,15 +1583,18 @@ public abstract class Engine implements Closeable {
         }
     }
 
+    /**
+     * Delete operation
+     *
+     * @opensearch.internal
+     */
     public static class Delete extends Operation {
 
-        private final String type;
         private final String id;
         private final long ifSeqNo;
         private final long ifPrimaryTerm;
 
         public Delete(
-            String type,
             String id,
             Term uid,
             long seqNo,
@@ -1540,15 +1612,13 @@ public abstract class Engine implements Closeable {
             assert ifSeqNo == UNASSIGNED_SEQ_NO || ifSeqNo >= 0 : "ifSeqNo [" + ifSeqNo + "] must be non negative or unset";
             assert (origin == Origin.PRIMARY) || (ifSeqNo == UNASSIGNED_SEQ_NO && ifPrimaryTerm == UNASSIGNED_PRIMARY_TERM)
                 : "cas operations are only allowed if origin is primary. get [" + origin + "]";
-            this.type = Objects.requireNonNull(type);
             this.id = Objects.requireNonNull(id);
             this.ifSeqNo = ifSeqNo;
             this.ifPrimaryTerm = ifPrimaryTerm;
         }
 
-        public Delete(String type, String id, Term uid, long primaryTerm) {
+        public Delete(String id, Term uid, long primaryTerm) {
             this(
-                type,
                 id,
                 uid,
                 UNASSIGNED_SEQ_NO,
@@ -1564,7 +1634,6 @@ public abstract class Engine implements Closeable {
 
         public Delete(Delete template, VersionType versionType) {
             this(
-                template.type(),
                 template.id(),
                 template.uid(),
                 template.seqNo(),
@@ -1576,11 +1645,6 @@ public abstract class Engine implements Closeable {
                 UNASSIGNED_SEQ_NO,
                 0
             );
-        }
-
-        @Override
-        public String type() {
-            return this.type;
         }
 
         @Override
@@ -1607,6 +1671,11 @@ public abstract class Engine implements Closeable {
         }
     }
 
+    /**
+     * noop operation
+     *
+     * @opensearch.internal
+     */
     public static class NoOp extends Operation {
 
         private final String reason;
@@ -1622,11 +1691,6 @@ public abstract class Engine implements Closeable {
 
         @Override
         public Term uid() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public String type() {
             throw new UnsupportedOperationException();
         }
 
@@ -1657,6 +1721,11 @@ public abstract class Engine implements Closeable {
 
     }
 
+    /**
+     * Get operation
+     *
+     * @opensearch.internal
+     */
     public static class Get {
         private final boolean realtime;
         private final Term uid;
@@ -1728,6 +1797,11 @@ public abstract class Engine implements Closeable {
 
     }
 
+    /**
+     * The Get result
+     *
+     * @opensearch.internal
+     */
     public static class GetResult implements Releasable {
         private final boolean exists;
         private final long version;
@@ -1828,28 +1902,6 @@ public abstract class Engine implements Closeable {
         }
     }
 
-    public static class IndexCommitRef implements Closeable {
-        private final AtomicBoolean closed = new AtomicBoolean();
-        private final CheckedRunnable<IOException> onClose;
-        private final IndexCommit indexCommit;
-
-        public IndexCommitRef(IndexCommit indexCommit, CheckedRunnable<IOException> onClose) {
-            this.indexCommit = indexCommit;
-            this.onClose = onClose;
-        }
-
-        @Override
-        public void close() throws IOException {
-            if (closed.compareAndSet(false, true)) {
-                onClose.run();
-            }
-        }
-
-        public IndexCommit getIndexCommit() {
-            return indexCommit;
-        }
-    }
-
     public void onSettingsChanged(TimeValue translogRetentionAge, ByteSizeValue translogRetentionSize, long softDeletesRetentionOps) {
 
     }
@@ -1870,6 +1922,8 @@ public abstract class Engine implements Closeable {
      * Called for each new opened engine reader to warm new segments
      *
      * @see EngineConfig#getWarmer()
+     *
+     * @opensearch.internal
      */
     public interface Warmer {
         /**
@@ -1939,6 +1993,11 @@ public abstract class Engine implements Closeable {
      */
     public abstract void updateMaxUnsafeAutoIdTimestamp(long newTimestamp);
 
+    /**
+     * The runner for translog recovery
+     *
+     * @opensearch.internal
+     */
     @FunctionalInterface
     public interface TranslogRecoveryRunner {
         int run(Engine engine, Translog.Snapshot snapshot) throws IOException;

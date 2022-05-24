@@ -57,6 +57,11 @@ import static org.opensearch.rest.RestRequest.Method.POST;
 import static org.opensearch.rest.action.RestActions.buildBroadcastShardsHeader;
 import static org.opensearch.search.internal.SearchContext.DEFAULT_TERMINATE_AFTER;
 
+/**
+ * Transport action to count documents
+ *
+ * @opensearch.api
+ */
 public class RestCountAction extends BaseRestHandler {
 
     @Override
@@ -66,10 +71,7 @@ public class RestCountAction extends BaseRestHandler {
                 new Route(GET, "/_count"),
                 new Route(POST, "/_count"),
                 new Route(GET, "/{index}/_count"),
-                new Route(POST, "/{index}/_count"),
-                // Deprecated typed endpoints.
-                new Route(GET, "/{index}/{type}/_count"),
-                new Route(POST, "/{index}/{type}/_count")
+                new Route(POST, "/{index}/_count")
             )
         );
     }

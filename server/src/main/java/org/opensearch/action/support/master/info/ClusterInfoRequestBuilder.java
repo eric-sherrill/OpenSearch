@@ -38,6 +38,11 @@ import org.opensearch.action.support.master.MasterNodeReadOperationRequestBuilde
 import org.opensearch.client.OpenSearchClient;
 import org.opensearch.common.util.ArrayUtils;
 
+/**
+ * Transport request builder for cluster information
+ *
+ * @opensearch.internal
+ */
 public abstract class ClusterInfoRequestBuilder<
     Request extends ClusterInfoRequest<Request>,
     Response extends ActionResponse,
@@ -59,18 +64,6 @@ public abstract class ClusterInfoRequestBuilder<
     @SuppressWarnings("unchecked")
     public Builder addIndices(String... indices) {
         request.indices(ArrayUtils.concat(request.indices(), indices));
-        return (Builder) this;
-    }
-
-    @SuppressWarnings("unchecked")
-    public Builder setTypes(String... types) {
-        request.types(types);
-        return (Builder) this;
-    }
-
-    @SuppressWarnings("unchecked")
-    public Builder addTypes(String... types) {
-        request.types(ArrayUtils.concat(request.types(), types));
         return (Builder) this;
     }
 

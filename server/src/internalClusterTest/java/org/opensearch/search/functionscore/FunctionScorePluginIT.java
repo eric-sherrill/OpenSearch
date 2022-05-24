@@ -76,17 +76,14 @@ public class FunctionScorePluginIT extends OpenSearchIntegTestCase {
         client().admin()
             .indices()
             .prepareCreate("test")
-            .addMapping(
-                "type1",
+            .setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num1")
                     .field("type", "date")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -171,7 +168,7 @@ public class FunctionScorePluginIT extends OpenSearchIntegTestCase {
             }
 
             @Override
-            public Explanation explainFunction(String distanceString, double distanceVal, double scale) {
+            public Explanation explainFunction(String distanceString, double distanceVal, double scale, String functionName) {
                 return Explanation.match((float) distanceVal, "" + distanceVal);
             }
 

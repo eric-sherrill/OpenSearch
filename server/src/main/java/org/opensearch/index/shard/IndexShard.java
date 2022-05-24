@@ -51,9 +51,9 @@ import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.util.SetOnce;
 import org.apache.lucene.util.ThreadInterruptedException;
 import org.opensearch.Assertions;
+import org.opensearch.ExceptionsHelper;
 import org.opensearch.LegacyESVersion;
 import org.opensearch.OpenSearchException;
-import org.opensearch.ExceptionsHelper;
 import org.opensearch.action.ActionListener;
 import org.opensearch.action.ActionRunnable;
 import org.opensearch.action.admin.indices.flush.FlushRequest;
@@ -73,6 +73,7 @@ import org.opensearch.common.CheckedFunction;
 import org.opensearch.common.CheckedRunnable;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.collect.Tuple;
+import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.io.stream.BytesStreamOutput;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lease.Releasables;
@@ -121,7 +122,6 @@ import org.opensearch.index.get.ShardGetService;
 import org.opensearch.index.mapper.DocumentMapper;
 import org.opensearch.index.mapper.DocumentMapperForType;
 import org.opensearch.index.mapper.IdFieldMapper;
-import org.opensearch.index.mapper.MapperParsingException;
 import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.mapper.Mapping;
 import org.opensearch.index.mapper.ParsedDocument;
@@ -153,11 +153,11 @@ import org.opensearch.index.warmer.ShardIndexWarmerService;
 import org.opensearch.index.warmer.WarmerStats;
 import org.opensearch.indices.IndexingMemoryController;
 import org.opensearch.indices.IndicesService;
-import org.opensearch.indices.TypeMissingException;
 import org.opensearch.indices.breaker.CircuitBreakerService;
 import org.opensearch.indices.cluster.IndicesClusterStateService;
 import org.opensearch.indices.recovery.PeerRecoveryTargetService;
 import org.opensearch.indices.recovery.RecoveryFailedException;
+import org.opensearch.indices.recovery.RecoveryListener;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.indices.recovery.RecoveryTarget;
 import org.opensearch.repositories.RepositoriesService;
@@ -200,6 +200,11 @@ import java.util.stream.StreamSupport;
 import static org.opensearch.index.seqno.RetentionLeaseActions.RETAIN_ALL;
 import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
 
+/**
+ * An OpenSearch index shard
+ *
+ * @opensearch.internal
+ */
 public class IndexShard extends AbstractIndexShardComponent implements IndicesClusterStateService.Shard {
 
     private final ThreadPool threadPool;
@@ -517,7 +522,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 assert currentRouting.isRelocationTarget() == false
                     || currentRouting.primary() == false
                     || replicationTracker.isPrimaryMode()
-                    : "a primary relocation is completed by the master, but primary mode is not active " + currentRouting;
+                    : "a primary relocation is completed by the cluster-managerr, but primary mode is not active " + currentRouting;
 
                 changeState(IndexShardState.STARTED, "global state is [" + newRouting.state() + "]");
             } else if (currentRouting.primary()
@@ -540,7 +545,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             if (newRouting.primary()) {
                 if (newPrimaryTerm == pendingPrimaryTerm) {
                     if (currentRouting.initializing() && currentRouting.isRelocationTarget() == false && newRouting.active()) {
-                        // the master started a recovering primary, activate primary mode.
+                        // the cluster-manager started a recovering primary, activate primary mode.
                         replicationTracker.activatePrimaryMode(getLocalCheckpoint());
                         ensurePeerRecoveryRetentionLeasesExist();
                     }
@@ -550,10 +555,10 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                      * in one state causing it's term to be incremented. Note that if both current shard state and new
                      * shard state are initializing, we could replace the current shard and reinitialize it. It is however
                      * possible that this shard is being started. This can happen if:
-                     * 1) Shard is post recovery and sends shard started to the master
+                     * 1) Shard is post recovery and sends shard started to the cluster-manager
                      * 2) Node gets disconnected and rejoins
-                     * 3) Master assigns the shard back to the node
-                     * 4) Master processes the shard started and starts the shard
+                     * 3) Cluster-manager assigns the shard back to the node
+                     * 4) Cluster-manager processes the shard started and starts the shard
                      * 5) The node process the cluster state where the shard is both started and primary term is incremented.
                      *
                      * We could fail the shard in that case, but this will cause it to be removed from the insync allocations list
@@ -758,7 +763,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             throw new IndexShardNotStartedException(shardId, state);
         }
         /*
-         * If the master cancelled recovery, the target will be removed and the recovery will be cancelled. However, it is still possible
+         * If the cluster-manager cancelled recovery, the target will be removed and the recovery will be cancelled. However, it is still possible
          * that we concurrently end up here and therefore have to protect that we do not mark the shard as relocated when its shard routing
          * says otherwise.
          */
@@ -866,23 +871,9 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         ensureWriteAllowed(origin);
         Engine.Index operation;
         try {
-            final String resolvedType = mapperService.resolveDocumentType(sourceToParse.type());
-            final SourceToParse sourceWithResolvedType;
-            if (resolvedType.equals(sourceToParse.type())) {
-                sourceWithResolvedType = sourceToParse;
-            } else {
-                sourceWithResolvedType = new SourceToParse(
-                    sourceToParse.index(),
-                    resolvedType,
-                    sourceToParse.id(),
-                    sourceToParse.source(),
-                    sourceToParse.getXContentType(),
-                    sourceToParse.routing()
-                );
-            }
             operation = prepareIndex(
-                docMapper(resolvedType),
-                sourceWithResolvedType,
+                docMapper(),
+                sourceToParse,
                 seqNo,
                 opPrimaryTerm,
                 version,
@@ -952,8 +943,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             if (logger.isTraceEnabled()) {
                 // don't use index.source().utf8ToString() here source might not be valid UTF-8
                 logger.trace(
-                    "index [{}][{}] seq# [{}] allocation-id [{}] primaryTerm [{}] operationPrimaryTerm [{}] origin [{}]",
-                    index.type(),
+                    "index [{}] seq# [{}] allocation-id [{}] primaryTerm [{}] operationPrimaryTerm [{}] origin [{}]",
                     index.id(),
                     index.seqNo(),
                     routingEntry().allocationId(),
@@ -965,9 +955,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             result = engine.index(index);
             if (logger.isTraceEnabled()) {
                 logger.trace(
-                    "index-done [{}][{}] seq# [{}] allocation-id [{}] primaryTerm [{}] operationPrimaryTerm [{}] origin [{}] "
+                    "index-done [{}] seq# [{}] allocation-id [{}] primaryTerm [{}] operationPrimaryTerm [{}] origin [{}] "
                         + "result-seq# [{}] result-term [{}] failure [{}]",
-                    index.type(),
                     index.id(),
                     index.seqNo(),
                     routingEntry().allocationId(),
@@ -983,8 +972,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             if (logger.isTraceEnabled()) {
                 logger.trace(
                     new ParameterizedMessage(
-                        "index-fail [{}][{}] seq# [{}] allocation-id [{}] primaryTerm [{}] operationPrimaryTerm [{}] origin [{}]",
-                        index.type(),
+                        "index-fail [{}] seq# [{}] allocation-id [{}] primaryTerm [{}] operationPrimaryTerm [{}] origin [{}]",
                         index.id(),
                         index.seqNo(),
                         routingEntry().allocationId(),
@@ -1037,7 +1025,6 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
 
     public Engine.DeleteResult applyDeleteOperationOnPrimary(
         long version,
-        String type,
         String id,
         VersionType versionType,
         long ifSeqNo,
@@ -1049,7 +1036,6 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             UNASSIGNED_SEQ_NO,
             getOperationPrimaryTerm(),
             version,
-            type,
             id,
             versionType,
             ifSeqNo,
@@ -1058,14 +1044,12 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         );
     }
 
-    public Engine.DeleteResult applyDeleteOperationOnReplica(long seqNo, long opPrimaryTerm, long version, String type, String id)
-        throws IOException {
+    public Engine.DeleteResult applyDeleteOperationOnReplica(long seqNo, long opPrimaryTerm, long version, String id) throws IOException {
         return applyDeleteOperation(
             getEngine(),
             seqNo,
             opPrimaryTerm,
             version,
-            type,
             id,
             null,
             UNASSIGNED_SEQ_NO,
@@ -1079,7 +1063,6 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         long seqNo,
         long opPrimaryTerm,
         long version,
-        String type,
         String id,
         @Nullable VersionType versionType,
         long ifSeqNo,
@@ -1092,54 +1075,12 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             + getOperationPrimaryTerm()
             + "]";
         ensureWriteAllowed(origin);
-        // When there is a single type, the unique identifier is only composed of the _id,
-        // so there is no way to differentiate foo#1 from bar#1. This is especially an issue
-        // if a user first deletes foo#1 and then indexes bar#1: since we do not encode the
-        // _type in the uid it might look like we are reindexing the same document, which
-        // would fail if bar#1 is indexed with a lower version than foo#1 was deleted with.
-        // In order to work around this issue, we make deletions create types. This way, we
-        // fail if index and delete operations do not use the same type.
-        // TODO: clean this up when types are gone
-        try {
-            Mapping update = docMapper(type).getMapping();
-            if (update != null) {
-                return new Engine.DeleteResult(update);
-            }
-        } catch (MapperParsingException | IllegalArgumentException | TypeMissingException e) {
-            return new Engine.DeleteResult(e, version, getOperationPrimaryTerm(), seqNo, false);
-        }
-        if (mapperService.resolveDocumentType(type).equals(mapperService.documentMapper().type()) == false) {
-            // We should never get there due to the fact that we generate mapping updates on deletes,
-            // but we still prefer to have a hard exception here as we would otherwise delete a
-            // document in the wrong type.
-            throw new IllegalStateException(
-                "Deleting document from type ["
-                    + mapperService.resolveDocumentType(type)
-                    + "] while current type is ["
-                    + mapperService.documentMapper().type()
-                    + "]"
-            );
-        }
-        final Term uid = new Term(IdFieldMapper.NAME, Uid.encodeId(id));
-        final Engine.Delete delete = prepareDelete(
-            type,
-            id,
-            uid,
-            seqNo,
-            opPrimaryTerm,
-            version,
-            versionType,
-            origin,
-            ifSeqNo,
-            ifPrimaryTerm
-        );
+        final Engine.Delete delete = prepareDelete(id, seqNo, opPrimaryTerm, version, versionType, origin, ifSeqNo, ifPrimaryTerm);
         return delete(engine, delete);
     }
 
-    private Engine.Delete prepareDelete(
-        String type,
+    public static Engine.Delete prepareDelete(
         String id,
-        Term uid,
         long seqNo,
         long primaryTerm,
         long version,
@@ -1149,19 +1090,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         long ifPrimaryTerm
     ) {
         long startTime = System.nanoTime();
-        return new Engine.Delete(
-            mapperService.resolveDocumentType(type),
-            id,
-            uid,
-            seqNo,
-            primaryTerm,
-            version,
-            versionType,
-            origin,
-            startTime,
-            ifSeqNo,
-            ifPrimaryTerm
-        );
+        final Term uid = new Term(IdFieldMapper.NAME, Uid.encodeId(id));
+        return new Engine.Delete(id, uid, seqNo, primaryTerm, version, versionType, origin, startTime, ifSeqNo, ifPrimaryTerm);
     }
 
     private Engine.DeleteResult delete(Engine engine, Engine.Delete delete) throws IOException {
@@ -1248,7 +1178,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         return getEngine().getSeqNoStats(replicationTracker.getGlobalCheckpoint());
     }
 
-    public IndexingStats indexingStats(String... types) {
+    public IndexingStats indexingStats() {
         Engine engine = getEngineOrNull();
         final boolean throttled;
         final long throttleTimeInMillis;
@@ -1409,7 +1339,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      *
      * @param flushFirst <code>true</code> if the index should first be flushed to disk / a low level lucene commit should be executed
      */
-    public Engine.IndexCommitRef acquireLastIndexCommit(boolean flushFirst) throws EngineException {
+    public GatedCloseable<IndexCommit> acquireLastIndexCommit(boolean flushFirst) throws EngineException {
         final IndexShardState state = this.state; // one time volatile read
         // we allow snapshot on closed index shard, since we want to do one after we close the shard and before we close the engine
         if (state == IndexShardState.STARTED || state == IndexShardState.CLOSED) {
@@ -1423,7 +1353,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      * Snapshots the most recent safe index commit from the currently running engine.
      * All index files referenced by this index commit won't be freed until the commit/snapshot is closed.
      */
-    public Engine.IndexCommitRef acquireSafeIndexCommit() throws EngineException {
+    public GatedCloseable<IndexCommit> acquireSafeIndexCommit() throws EngineException {
         final IndexShardState state = this.state; // one time volatile read
         // we allow snapshot on closed index shard, since we want to do one after we close the shard and before we close the engine
         if (state == IndexShardState.STARTED || state == IndexShardState.CLOSED) {
@@ -1448,7 +1378,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      */
     public Store.MetadataSnapshot snapshotStoreMetadata() throws IOException {
         assert Thread.holdsLock(mutex) == false : "snapshotting store metadata under mutex";
-        Engine.IndexCommitRef indexCommit = null;
+        GatedCloseable<IndexCommit> wrappedIndexCommit = null;
         store.incRef();
         try {
             synchronized (engineMutex) {
@@ -1456,16 +1386,16 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 // the engine on us. If the engine is running, we can get a snapshot via the deletion policy of the engine.
                 final Engine engine = getEngineOrNull();
                 if (engine != null) {
-                    indexCommit = engine.acquireLastIndexCommit(false);
+                    wrappedIndexCommit = engine.acquireLastIndexCommit(false);
                 }
-                if (indexCommit == null) {
+                if (wrappedIndexCommit == null) {
                     return store.getMetadata(null, true);
                 }
             }
-            return store.getMetadata(indexCommit.getIndexCommit());
+            return store.getMetadata(wrappedIndexCommit.get());
         } finally {
             store.decRef();
-            IOUtils.close(indexCommit);
+            IOUtils.close(wrappedIndexCommit);
         }
     }
 
@@ -1574,6 +1504,11 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         }
     }
 
+    /**
+     * Wrapper for a non-closing reader
+     *
+     * @opensearch.internal
+     */
     private static final class NonClosingReaderWrapper extends FilterDirectoryReader {
 
         private NonClosingReaderWrapper(DirectoryReader in) throws IOException {
@@ -1812,7 +1747,6 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                     origin,
                     new SourceToParse(
                         shardId.getIndexName(),
-                        index.type(),
                         index.id(),
                         index.source(),
                         XContentHelper.xContentType(index.source()),
@@ -1827,7 +1761,6 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                     delete.seqNo(),
                     delete.primaryTerm(),
                     delete.version(),
-                    delete.type(),
                     delete.id(),
                     versionType,
                     UNASSIGNED_SEQ_NO,
@@ -2182,7 +2115,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     }
 
     public void recoverFromLocalShards(
-        BiConsumer<String, MappingMetadata> mappingUpdateConsumer,
+        Consumer<MappingMetadata> mappingUpdateConsumer,
         List<IndexShard> localShards,
         ActionListener<Boolean> listener
     ) throws IOException {
@@ -2309,13 +2242,13 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     }
 
     /**
-     *
      * Creates a new history snapshot for reading operations since
      * the provided starting seqno (inclusive) and ending seqno (inclusive)
      * The returned snapshot can be retrieved from either Lucene index or translog files.
      */
-    public Translog.Snapshot getHistoryOperations(String reason, long startingSeqNo, long endSeqNo) throws IOException {
-        return getEngine().newChangesSnapshot(reason, mapperService, startingSeqNo, endSeqNo, true);
+    public Translog.Snapshot getHistoryOperations(String reason, long startingSeqNo, long endSeqNo, boolean accurateCount)
+        throws IOException {
+        return getEngine().newChangesSnapshot(reason, startingSeqNo, endSeqNo, true, accurateCount);
     }
 
     /**
@@ -2336,6 +2269,17 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     }
 
     /**
+     * Counts the number of history operations within the provided sequence numbers
+     * @param source     source of the requester (e.g., peer-recovery)
+     * @param fromSeqNo  from sequence number, included
+     * @param toSeqNo    to sequence number, included
+     * @return           number of history operations in the sequence number range
+     */
+    public int countNumberOfHistoryOperations(String source, long fromSeqNo, long toSeqNo) throws IOException {
+        return getEngine().countNumberOfHistoryOperations(source, fromSeqNo, toSeqNo);
+    }
+
+    /**
      * Creates a new changes snapshot for reading operations whose seq_no are between {@code fromSeqNo}(inclusive)
      * and {@code toSeqNo}(inclusive). The caller has to close the returned snapshot after finishing the reading.
      *
@@ -2346,8 +2290,14 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      *                          if any operation between {@code fromSeqNo} and {@code toSeqNo} is missing.
      *                          This parameter should be only enabled when the entire requesting range is below the global checkpoint.
      */
-    public Translog.Snapshot newChangesSnapshot(String source, long fromSeqNo, long toSeqNo, boolean requiredFullRange) throws IOException {
-        return getEngine().newChangesSnapshot(source, mapperService, fromSeqNo, toSeqNo, requiredFullRange);
+    public Translog.Snapshot newChangesSnapshot(
+        String source,
+        long fromSeqNo,
+        long toSeqNo,
+        boolean requiredFullRange,
+        boolean accurateCount
+    ) throws IOException {
+        return getEngine().newChangesSnapshot(source, fromSeqNo, toSeqNo, requiredFullRange, accurateCount);
     }
 
     public List<Segment> segments(boolean verbose) {
@@ -2927,9 +2877,9 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     public void startRecovery(
         RecoveryState recoveryState,
         PeerRecoveryTargetService recoveryTargetService,
-        PeerRecoveryTargetService.RecoveryListener recoveryListener,
+        RecoveryListener recoveryListener,
         RepositoriesService repositoriesService,
-        BiConsumer<String, MappingMetadata> mappingUpdateConsumer,
+        Consumer<MappingMetadata> mappingUpdateConsumer,
         IndicesService indicesService
     ) {
         // TODO: Create a proper object to encapsulate the recovery context
@@ -2960,7 +2910,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                     recoveryTargetService.startRecovery(this, recoveryState.getSourceNode(), recoveryListener);
                 } catch (Exception e) {
                     failShard("corrupted preexisting index", e);
-                    recoveryListener.onRecoveryFailure(recoveryState, new RecoveryFailedException(recoveryState, null, e), true);
+                    recoveryListener.onFailure(recoveryState, new RecoveryFailedException(recoveryState, null, e), true);
                 }
                 break;
             case SNAPSHOT:
@@ -3035,15 +2985,15 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     private void executeRecovery(
         String reason,
         RecoveryState recoveryState,
-        PeerRecoveryTargetService.RecoveryListener recoveryListener,
+        RecoveryListener recoveryListener,
         CheckedConsumer<ActionListener<Boolean>, Exception> action
     ) {
         markAsRecovering(reason, recoveryState); // mark the shard as recovering on the cluster state thread
         threadPool.generic().execute(ActionRunnable.wrap(ActionListener.wrap(r -> {
             if (r) {
-                recoveryListener.onRecoveryDone(recoveryState);
+                recoveryListener.onDone(recoveryState);
             }
-        }, e -> recoveryListener.onRecoveryFailure(recoveryState, new RecoveryFailedException(recoveryState, null, e), true)), action));
+        }, e -> recoveryListener.onFailure(recoveryState, new RecoveryFailedException(recoveryState, null, e), true)), action));
     }
 
     /**
@@ -3142,8 +3092,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         }
     }
 
-    private DocumentMapperForType docMapper(String type) {
-        return mapperService.documentMapperWithAutoCreate(mapperService.resolveDocumentType(type));
+    private DocumentMapperForType docMapper() {
+        return mapperService.documentMapperWithAutoCreate();
     }
 
     private EngineConfig newEngineConfig(LongSupplier globalCheckpointSupplier) {
@@ -3155,6 +3105,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 this.warmer.warm(reader);
             }
         };
+
         return this.engineConfigFactory.newEngineConfig(
             shardId,
             threadPool,
@@ -3164,7 +3115,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             indexSettings.getMergePolicy(),
             mapperService != null ? mapperService.indexAnalyzer() : null,
             similarityService.similarity(mapperService),
-            codecService,
+            engineConfigFactory.newCodecServiceOrDefault(indexSettings, mapperService, logger, codecService),
             shardEventListener,
             indexCache != null ? indexCache.query() : null,
             cachingPolicy,
@@ -3458,7 +3409,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                     final IndexShardState shardState = state();
                     // only roll translog and update primary term if shard has made it past recovery
                     // Having a new primary term here means that the old primary failed and that there is a new primary, which again
-                    // means that the master will fail this shard as all initializing shards are failed when a primary is selected
+                    // means that the cluster-manager will fail this shard as all initializing shards are failed when a primary is selected
                     // We abort early here to prevent an ongoing recovery from the failed primary to mess with the global / local checkpoint
                     if (shardState != IndexShardState.POST_RECOVERY && shardState != IndexShardState.STARTED) {
                         throw new IndexShardNotStartedException(shardId, shardState);
@@ -3663,6 +3614,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      * Simple struct encapsulating a shard failure
      *
      * @see IndexShard#addShardFailureCallback(Consumer)
+     *
+     * @opensearch.internal
      */
     public static final class ShardFailure {
         public final ShardRouting routing;
@@ -3828,6 +3781,11 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         }
     }
 
+    /**
+     * Metrics updater for a refresh
+     *
+     * @opensearch.internal
+     */
     private static class RefreshMetricUpdater implements ReferenceManager.RefreshListener {
 
         private final MeanMetric refreshMetric;
@@ -3871,8 +3829,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             : null;
         return new EngineConfig.TombstoneDocSupplier() {
             @Override
-            public ParsedDocument newDeleteTombstoneDoc(String type, String id) {
-                return docMapper(type).getDocumentMapper().createDeleteTombstoneDoc(shardId.getIndexName(), type, id);
+            public ParsedDocument newDeleteTombstoneDoc(String id) {
+                return docMapper().getDocumentMapper().createDeleteTombstoneDoc(shardId.getIndexName(), id);
             }
 
             @Override
@@ -3912,7 +3870,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 true
             ) {
                 @Override
-                public IndexCommitRef acquireLastIndexCommit(boolean flushFirst) {
+                public GatedCloseable<IndexCommit> acquireLastIndexCommit(boolean flushFirst) {
                     synchronized (engineMutex) {
                         if (newEngineReference.get() == null) {
                             throw new AlreadyClosedException("engine was closed");
@@ -3923,7 +3881,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 }
 
                 @Override
-                public IndexCommitRef acquireSafeIndexCommit() {
+                public GatedCloseable<IndexCommit> acquireSafeIndexCommit() {
                     synchronized (engineMutex) {
                         if (newEngineReference.get() == null) {
                             throw new AlreadyClosedException("engine was closed");

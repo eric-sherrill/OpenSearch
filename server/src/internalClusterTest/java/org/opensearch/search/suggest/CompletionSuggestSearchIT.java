@@ -34,7 +34,7 @@ package org.opensearch.search.suggest;
 import com.carrotsearch.randomizedtesting.generators.RandomStrings;
 import org.apache.lucene.analysis.TokenStreamToAutomaton;
 import org.apache.lucene.search.suggest.document.ContextSuggestField;
-import org.apache.lucene.util.LuceneTestCase.SuppressCodecs;
+import org.apache.lucene.tests.util.LuceneTestCase.SuppressCodecs;
 import org.opensearch.action.admin.indices.forcemerge.ForceMergeResponse;
 import org.opensearch.action.admin.indices.segments.IndexShardSegments;
 import org.opensearch.action.admin.indices.segments.ShardSegments;
@@ -682,15 +682,13 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
 
     public void testThatUpgradeToMultiFieldsWorks() throws Exception {
         final XContentBuilder mapping = jsonBuilder().startObject()
-            .startObject(MapperService.SINGLE_MAPPING_NAME)
             .startObject("properties")
             .startObject(FIELD)
             .field("type", "text")
             .endObject()
             .endObject()
-            .endObject()
             .endObject();
-        assertAcked(prepareCreate(INDEX).addMapping(MapperService.SINGLE_MAPPING_NAME, mapping));
+        assertAcked(prepareCreate(INDEX).setMapping(mapping));
         client().prepareIndex(INDEX)
             .setId("1")
             .setRefreshPolicy(IMMEDIATE)
@@ -701,7 +699,6 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
         AcknowledgedResponse putMappingResponse = client().admin()
             .indices()
             .preparePutMapping(INDEX)
-            .setType(MapperService.SINGLE_MAPPING_NAME)
             .setSource(
                 jsonBuilder().startObject()
                     .startObject(MapperService.SINGLE_MAPPING_NAME)
@@ -967,7 +964,6 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
         AcknowledgedResponse putMappingResponse = client().admin()
             .indices()
             .preparePutMapping(INDEX)
-            .setType(MapperService.SINGLE_MAPPING_NAME)
             .setSource(
                 jsonBuilder().startObject()
                     .startObject(MapperService.SINGLE_MAPPING_NAME)
@@ -1330,7 +1326,7 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
                 .indices()
                 .prepareCreate(INDEX)
                 .setSettings(Settings.builder().put(indexSettings()).put(settings))
-                .addMapping(MapperService.SINGLE_MAPPING_NAME, mapping)
+                .setMapping(mapping)
                 .get()
         );
     }
@@ -1378,14 +1374,11 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
             client().admin()
                 .indices()
                 .prepareCreate(INDEX)
-                .addMapping(
-                    MapperService.SINGLE_MAPPING_NAME,
+                .setMapping(
                     jsonBuilder().startObject()
-                        .startObject(MapperService.SINGLE_MAPPING_NAME)
                         .startObject("properties")
                         .startObject(FIELD)
                         .field("type", "completion")
-                        .endObject()
                         .endObject()
                         .endObject()
                         .endObject()
@@ -1410,14 +1403,11 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
             client().admin()
                 .indices()
                 .prepareCreate(INDEX)
-                .addMapping(
-                    MapperService.SINGLE_MAPPING_NAME,
+                .setMapping(
                     jsonBuilder().startObject()
-                        .startObject(MapperService.SINGLE_MAPPING_NAME)
                         .startObject("properties")
                         .startObject(FIELD)
                         .field("type", "completion")
-                        .endObject()
                         .endObject()
                         .endObject()
                         .endObject()
@@ -1451,14 +1441,11 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
             client().admin()
                 .indices()
                 .prepareCreate(INDEX)
-                .addMapping(
-                    MapperService.SINGLE_MAPPING_NAME,
+                .setMapping(
                     jsonBuilder().startObject()
-                        .startObject(MapperService.SINGLE_MAPPING_NAME)
                         .startObject("properties")
                         .startObject(FIELD)
                         .field("type", "completion")
-                        .endObject()
                         .endObject()
                         .endObject()
                         .endObject()
@@ -1510,7 +1497,6 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
     public void testSuggestWithFieldAlias() throws Exception {
         XContentBuilder mapping = XContentFactory.jsonBuilder()
             .startObject()
-            .startObject(MapperService.SINGLE_MAPPING_NAME)
             .startObject("properties")
             .startObject(FIELD)
             .field("type", "completion")
@@ -1520,9 +1506,8 @@ public class CompletionSuggestSearchIT extends OpenSearchIntegTestCase {
             .field("path", FIELD)
             .endObject()
             .endObject()
-            .endObject()
             .endObject();
-        assertAcked(prepareCreate(INDEX).addMapping(MapperService.SINGLE_MAPPING_NAME, mapping));
+        assertAcked(prepareCreate(INDEX).setMapping(mapping));
 
         List<IndexRequestBuilder> builders = new ArrayList<>();
         builders.add(client().prepareIndex(INDEX).setSource(FIELD, "apple"));

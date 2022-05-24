@@ -35,13 +35,11 @@ import org.opensearch.OpenSearchException;
 import org.opensearch.action.index.IndexRequestBuilder;
 import org.opensearch.action.search.SearchPhaseExecutionException;
 import org.opensearch.action.search.SearchResponse;
-import org.opensearch.bootstrap.JavaVersion;
 import org.opensearch.common.Strings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.time.DateFormatter;
 import org.opensearch.common.time.DateFormatters;
 import org.opensearch.common.time.DateMathParser;
-import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.index.mapper.DateFieldMapper;
 import org.opensearch.index.query.MatchNoneQueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
@@ -145,7 +143,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
     public void setupSuiteScopeCluster() throws Exception {
         createIndex("idx", "idx_unmapped");
         // TODO: would be nice to have more random data here
-        assertAcked(prepareCreate("empty_bucket_idx").addMapping("type", "value", "type=integer"));
+        assertAcked(prepareCreate("empty_bucket_idx").setMapping("value", "type=integer"));
         List<IndexRequestBuilder> builders = new ArrayList<>();
         for (int i = 0; i < 2; i++) {
             builders.add(
@@ -189,7 +187,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
         addExpectedBucket(date(1, 6), 1, 5, 1);
         addExpectedBucket(date(1, 7), 1, 5, 1);
 
-        assertAcked(client().admin().indices().prepareCreate("sort_idx").addMapping("type", "date", "type=date").get());
+        assertAcked(client().admin().indices().prepareCreate("sort_idx").setMapping("date", "type=date").get());
         for (int i = 1; i <= 3; i++) {
             builders.add(
                 client().prepareIndex("sort_idx")
@@ -387,9 +385,6 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
             ZonedDateTime expectedKey = keyIterator.next();
             String bucketKey = bucket.getKeyAsString();
             String expectedBucketName = Long.toString(expectedKey.toInstant().toEpochMilli() / millisDivider);
-            if (JavaVersion.current().getVersion().get(0) == 8 && bucket.getKeyAsString().endsWith(".0")) {
-                expectedBucketName = expectedBucketName + ".0";
-            }
             assertThat(bucketKey, equalTo(expectedBucketName));
             assertThat(((ZonedDateTime) bucket.getKey()), equalTo(expectedKey));
             assertThat(bucket.getDocCount(), equalTo(1L));
@@ -1039,7 +1034,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
     }
 
     public void testSingleValueWithTimeZone() throws Exception {
-        prepareCreate("idx2").addMapping("type", "date", "type=date").get();
+        prepareCreate("idx2").setMapping("date", "type=date").get();
         IndexRequestBuilder[] reqs = new IndexRequestBuilder[5];
         ZonedDateTime date = date("2014-03-11T00:00:00+00:00");
         for (int i = 0; i < reqs.length; i++) {
@@ -1316,7 +1311,6 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
     public void testSingleValueWithMultipleDateFormatsFromMapping() throws Exception {
         String mappingJson = Strings.toString(
             jsonBuilder().startObject()
-                .startObject("type")
                 .startObject("properties")
                 .startObject("date")
                 .field("type", "date")
@@ -1324,9 +1318,8 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
                 .endObject()
                 .endObject()
                 .endObject()
-                .endObject()
         );
-        prepareCreate("idx2").addMapping("type", mappingJson, XContentType.JSON).get();
+        prepareCreate("idx2").setMapping(mappingJson).get();
         IndexRequestBuilder[] reqs = new IndexRequestBuilder[5];
         for (int i = 0; i < reqs.length; i++) {
             reqs[i] = client().prepareIndex("idx2")
@@ -1397,7 +1390,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
     }
 
     public void testDSTBoundaryIssue9491() throws InterruptedException, ExecutionException {
-        assertAcked(client().admin().indices().prepareCreate("test9491").addMapping("type", "d", "type=date").get());
+        assertAcked(client().admin().indices().prepareCreate("test9491").setMapping("d", "type=date").get());
         indexRandom(
             true,
             client().prepareIndex("test9491").setSource("d", "2014-10-08T13:00:00Z"),
@@ -1420,7 +1413,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
     }
 
     public void testIssue8209() throws InterruptedException, ExecutionException {
-        assertAcked(client().admin().indices().prepareCreate("test8209").addMapping("type", "d", "type=date").get());
+        assertAcked(client().admin().indices().prepareCreate("test8209").setMapping("d", "type=date").get());
         indexRandom(
             true,
             client().prepareIndex("test8209").setSource("d", "2014-01-01T00:00:00Z"),
@@ -1501,7 +1494,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
      */
     public void testRewriteTimeZone_EpochMillisFormat() throws InterruptedException, ExecutionException {
         String index = "test31392";
-        assertAcked(client().admin().indices().prepareCreate(index).addMapping("type", "d", "type=date,format=epoch_millis").get());
+        assertAcked(client().admin().indices().prepareCreate(index).setMapping("d", "type=date,format=epoch_millis").get());
         indexRandom(true, client().prepareIndex(index).setSource("d", "1477954800000"));
         ensureSearchable(index);
         SearchResponse response = client().prepareSearch(index)
@@ -1512,11 +1505,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
         assertSearchResponse(response);
         Histogram histo = response.getAggregations().get("histo");
         assertThat(histo.getBuckets().size(), equalTo(1));
-        if (JavaVersion.current().getVersion().get(0) == 8 && histo.getBuckets().get(0).getKeyAsString().endsWith(".0")) {
-            assertThat(histo.getBuckets().get(0).getKeyAsString(), equalTo("1477954800000.0"));
-        } else {
-            assertThat(histo.getBuckets().get(0).getKeyAsString(), equalTo("1477954800000"));
-        }
+        assertThat(histo.getBuckets().get(0).getKeyAsString(), equalTo("1477954800000"));
         assertThat(histo.getBuckets().get(0).getDocCount(), equalTo(1L));
 
         response = client().prepareSearch(index)
@@ -1611,7 +1600,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
      */
     public void testScriptCaching() throws Exception {
         assertAcked(
-            prepareCreate("cache_test_idx").addMapping("type", "d", "type=date")
+            prepareCreate("cache_test_idx").setMapping("d", "type=date")
                 .setSettings(Settings.builder().put("requests.cache.enable", true).put("number_of_shards", 1).put("number_of_replicas", 1))
                 .get()
         );
@@ -1831,7 +1820,7 @@ public class DateHistogramIT extends OpenSearchIntegTestCase {
      * timeZones.
      */
     public void testDateNanosHistogram() throws Exception {
-        assertAcked(prepareCreate("nanos").addMapping("_doc", "date", "type=date_nanos").get());
+        assertAcked(prepareCreate("nanos").setMapping("date", "type=date_nanos").get());
         indexRandom(true, client().prepareIndex("nanos").setId("1").setSource("date", "2000-01-01"));
         indexRandom(true, client().prepareIndex("nanos").setId("2").setSource("date", "2000-01-02"));
 

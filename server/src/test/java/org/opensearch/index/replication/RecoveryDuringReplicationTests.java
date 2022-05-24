@@ -69,16 +69,14 @@ import org.opensearch.index.shard.IndexShardTestCase;
 import org.opensearch.index.shard.PrimaryReplicaSyncer;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.Translog;
-import org.opensearch.indices.recovery.PeerRecoveryTargetService;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.indices.recovery.RecoveryTarget;
+import org.opensearch.indices.replication.common.ReplicationListener;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
@@ -159,7 +157,7 @@ public class RecoveryDuringReplicationTests extends OpenSearchIndexLevelReplicat
                 1,
                 randomNonNegativeLong(),
                 false,
-                new SourceToParse("index", "type", "replica", new BytesArray("{}"), XContentType.JSON)
+                new SourceToParse("index", "replica", new BytesArray("{}"), XContentType.JSON)
             );
             shards.promoteReplicaToPrimary(promotedReplica).get();
             oldPrimary.close("demoted", randomBoolean());
@@ -173,7 +171,7 @@ public class RecoveryDuringReplicationTests extends OpenSearchIndexLevelReplicat
                 promotedReplica.applyIndexOperationOnPrimary(
                     Versions.MATCH_ANY,
                     VersionType.INTERNAL,
-                    new SourceToParse("index", "type", "primary", new BytesArray("{}"), XContentType.JSON),
+                    new SourceToParse("index", "primary", new BytesArray("{}"), XContentType.JSON),
                     SequenceNumbers.UNASSIGNED_SEQ_NO,
                     0,
                     IndexRequest.UNSET_AUTO_GENERATED_TIMESTAMP,
@@ -358,10 +356,7 @@ public class RecoveryDuringReplicationTests extends OpenSearchIndexLevelReplicat
     }
 
     public void testResyncAfterPrimaryPromotion() throws Exception {
-        Map<String, String> mappings = Collections.singletonMap(
-            "type",
-            "{ \"type\": { \"properties\": { \"f\": { \"type\": \"keyword\"} }}}"
-        );
+        String mappings = "{ \"_doc\": { \"properties\": { \"f\": { \"type\": \"keyword\"} }}}";
         try (ReplicationGroup shards = new ReplicationGroup(buildIndexMetadata(2, mappings))) {
             shards.startAll();
             int initialDocs = randomInt(10);
@@ -814,7 +809,7 @@ public class RecoveryDuringReplicationTests extends OpenSearchIndexLevelReplicat
             CountDownLatch releaseRecovery,
             IndexShard shard,
             DiscoveryNode sourceNode,
-            PeerRecoveryTargetService.RecoveryListener listener,
+            ReplicationListener listener,
             Logger logger
         ) {
             super(shard, sourceNode, listener);

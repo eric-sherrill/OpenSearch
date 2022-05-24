@@ -63,6 +63,8 @@ import java.util.Optional;
 
 /**
  * Put mapping action.
+ *
+ * @opensearch.internal
  */
 public class TransportPutMappingAction extends TransportMasterNodeAction<PutMappingRequest, AcknowledgedResponse> {
 
@@ -132,10 +134,7 @@ public class TransportPutMappingAction extends TransportMasterNodeAction<PutMapp
             }
             performMappingUpdate(concreteIndices, request, listener, metadataMappingService);
         } catch (IndexNotFoundException ex) {
-            logger.debug(
-                () -> new ParameterizedMessage("failed to put mappings on indices [{}], type [{}]", request.indices(), request.type()),
-                ex
-            );
+            logger.debug(() -> new ParameterizedMessage("failed to put mappings on indices [{}]", Arrays.asList(request.indices())), ex);
             throw ex;
         }
     }
@@ -170,11 +169,9 @@ public class TransportPutMappingAction extends TransportMasterNodeAction<PutMapp
         ActionListener<AcknowledgedResponse> listener,
         MetadataMappingService metadataMappingService
     ) {
-        PutMappingClusterStateUpdateRequest updateRequest = new PutMappingClusterStateUpdateRequest().ackTimeout(request.timeout())
-            .masterNodeTimeout(request.masterNodeTimeout())
-            .indices(concreteIndices)
-            .type(request.type())
-            .source(request.source());
+        PutMappingClusterStateUpdateRequest updateRequest = new PutMappingClusterStateUpdateRequest(request.source()).indices(
+            concreteIndices
+        ).ackTimeout(request.timeout()).masterNodeTimeout(request.masterNodeTimeout());
 
         metadataMappingService.putMapping(updateRequest, new ActionListener<ClusterStateUpdateResponse>() {
 

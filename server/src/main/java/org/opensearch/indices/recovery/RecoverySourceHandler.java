@@ -57,6 +57,7 @@ import org.opensearch.common.CheckedRunnable;
 import org.opensearch.common.StopWatch;
 import org.opensearch.common.bytes.BytesArray;
 import org.opensearch.common.bytes.BytesReference;
+import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.common.logging.Loggers;
@@ -64,11 +65,10 @@ import org.opensearch.common.lucene.store.InputStreamIndexInput;
 import org.opensearch.common.unit.ByteSizeValue;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.util.CancellableThreads;
-import org.opensearch.common.util.concurrent.OpenSearchExecutors;
 import org.opensearch.common.util.concurrent.FutureUtils;
 import org.opensearch.common.util.concurrent.ListenableFuture;
+import org.opensearch.common.util.concurrent.OpenSearchExecutors;
 import org.opensearch.core.internal.io.IOUtils;
-import org.opensearch.index.engine.Engine;
 import org.opensearch.index.engine.RecoveryEngineException;
 import org.opensearch.index.seqno.ReplicationTracker;
 import org.opensearch.index.seqno.RetentionLease;
@@ -115,6 +115,8 @@ import java.util.stream.StreamSupport;
  * while the {@link RateLimiter} passed via {@link RecoverySettings} is shared across recoveries
  * originating from this nodes to throttle the number bytes send during file transfer. The transaction log
  * phase bypasses the rate limiter entirely.
+ *
+ * @opensearch.internal
  */
 public class RecoverySourceHandler {
 
@@ -132,7 +134,7 @@ public class RecoverySourceHandler {
     private final CancellableThreads cancellableThreads = new CancellableThreads();
     private final List<Closeable> resources = new CopyOnWriteArrayList<>();
     private final ListenableFuture<RecoveryResponse> future = new ListenableFuture<>();
-    private static final String PEER_RECOVERY_NAME = "peer-recovery";
+    public static final String PEER_RECOVERY_NAME = "peer-recovery";
 
     public RecoverySourceHandler(
         IndexShard shard,
@@ -250,10 +252,10 @@ public class RecoverySourceHandler {
                     sendFileStep.onResponse(SendFileResult.EMPTY);
                 }
             } else {
-                final Engine.IndexCommitRef safeCommitRef;
+                final GatedCloseable<IndexCommit> wrappedSafeCommit;
                 try {
-                    safeCommitRef = acquireSafeCommit(shard);
-                    resources.add(safeCommitRef);
+                    wrappedSafeCommit = acquireSafeCommit(shard);
+                    resources.add(wrappedSafeCommit);
                 } catch (final Exception e) {
                     throw new RecoveryEngineException(shard.shardId(), 1, "snapshot failed", e);
                 }
@@ -268,16 +270,16 @@ public class RecoverySourceHandler {
                 // advances and not when creating a new safe commit. In any case this is a best-effort thing since future recoveries can
                 // always fall back to file-based ones, and only really presents a problem if this primary fails before things have settled
                 // down.
-                startingSeqNo = Long.parseLong(safeCommitRef.getIndexCommit().getUserData().get(SequenceNumbers.LOCAL_CHECKPOINT_KEY)) + 1L;
+                startingSeqNo = Long.parseLong(wrappedSafeCommit.get().getUserData().get(SequenceNumbers.LOCAL_CHECKPOINT_KEY)) + 1L;
                 logger.trace("performing file-based recovery followed by history replay starting at [{}]", startingSeqNo);
 
                 try {
-                    final int estimateNumOps = estimateNumberOfHistoryOperations(startingSeqNo);
+                    final int estimateNumOps = countNumberOfHistoryOperations(startingSeqNo);
                     final Releasable releaseStore = acquireStore(shard.store());
                     resources.add(releaseStore);
-                    sendFileStep.whenComplete(r -> IOUtils.close(safeCommitRef, releaseStore), e -> {
+                    sendFileStep.whenComplete(r -> IOUtils.close(wrappedSafeCommit, releaseStore), e -> {
                         try {
-                            IOUtils.close(safeCommitRef, releaseStore);
+                            IOUtils.close(wrappedSafeCommit, releaseStore);
                         } catch (final IOException ex) {
                             logger.warn("releasing snapshot caused exception", ex);
                         }
@@ -307,7 +309,7 @@ public class RecoverySourceHandler {
 
                     deleteRetentionLeaseStep.whenComplete(ignored -> {
                         assert Transports.assertNotTransportThread(RecoverySourceHandler.this + "[phase1]");
-                        phase1(safeCommitRef.getIndexCommit(), startingSeqNo, () -> estimateNumOps, sendFileStep);
+                        phase1(wrappedSafeCommit.get(), startingSeqNo, () -> estimateNumOps, sendFileStep);
                     }, onFailure);
 
                 } catch (final Exception e) {
@@ -319,7 +321,7 @@ public class RecoverySourceHandler {
             sendFileStep.whenComplete(r -> {
                 assert Transports.assertNotTransportThread(RecoverySourceHandler.this + "[prepareTargetForTranslog]");
                 // For a sequence based recovery, the target can keep its local translog
-                prepareTargetForTranslog(estimateNumberOfHistoryOperations(startingSeqNo), prepareEngineStep);
+                prepareTargetForTranslog(countNumberOfHistoryOperations(startingSeqNo), prepareEngineStep);
             }, onFailure);
 
             prepareEngineStep.whenComplete(prepareEngineTime -> {
@@ -340,9 +342,15 @@ public class RecoverySourceHandler {
 
                 final long endingSeqNo = shard.seqNoStats().getMaxSeqNo();
                 if (logger.isTraceEnabled()) {
-                    logger.trace("snapshot translog for recovery; current size is [{}]", estimateNumberOfHistoryOperations(startingSeqNo));
+                    logger.trace("snapshot translog for recovery; current size is [{}]", countNumberOfHistoryOperations(startingSeqNo));
                 }
-                final Translog.Snapshot phase2Snapshot = shard.newChangesSnapshot(PEER_RECOVERY_NAME, startingSeqNo, Long.MAX_VALUE, false);
+                final Translog.Snapshot phase2Snapshot = shard.newChangesSnapshot(
+                    PEER_RECOVERY_NAME,
+                    startingSeqNo,
+                    Long.MAX_VALUE,
+                    false,
+                    true
+                );
                 resources.add(phase2Snapshot);
                 retentionLock.close();
 
@@ -403,10 +411,13 @@ public class RecoverySourceHandler {
         return targetHistoryUUID.equals(shard.getHistoryUUID());
     }
 
-    private int estimateNumberOfHistoryOperations(long startingSeqNo) throws IOException {
-        try (Translog.Snapshot snapshot = shard.newChangesSnapshot(PEER_RECOVERY_NAME, startingSeqNo, Long.MAX_VALUE, false)) {
-            return snapshot.totalOperations();
-        }
+    /**
+     * Counts the number of history operations from the starting sequence number
+     * @param startingSeqNo   the starting sequence number to count; included
+     * @return                number of history operations
+     */
+    private int countNumberOfHistoryOperations(long startingSeqNo) throws IOException {
+        return shard.countNumberOfHistoryOperations(PEER_RECOVERY_NAME, startingSeqNo, Long.MAX_VALUE);
     }
 
     static void runUnderPrimaryPermit(
@@ -467,12 +478,12 @@ public class RecoverySourceHandler {
      * with the file systems due to interrupt (see {@link org.apache.lucene.store.NIOFSDirectory} javadocs for more detail).
      * This method acquires a safe commit and wraps it to make sure that it will be released using the generic thread pool.
      */
-    private Engine.IndexCommitRef acquireSafeCommit(IndexShard shard) {
-        final Engine.IndexCommitRef commitRef = shard.acquireSafeIndexCommit();
+    private GatedCloseable<IndexCommit> acquireSafeCommit(IndexShard shard) {
+        final GatedCloseable<IndexCommit> wrappedSafeCommit = shard.acquireSafeIndexCommit();
         final AtomicBoolean closed = new AtomicBoolean(false);
-        return new Engine.IndexCommitRef(commitRef.getIndexCommit(), () -> {
+        return new GatedCloseable<>(wrappedSafeCommit.get(), () -> {
             if (closed.compareAndSet(false, true)) {
-                runWithGenericThreadPool(commitRef::close);
+                runWithGenericThreadPool(wrappedSafeCommit::close);
             }
         });
     }
@@ -487,6 +498,11 @@ public class RecoverySourceHandler {
         FutureUtils.get(future);
     }
 
+    /**
+     * A send file result
+     *
+     * @opensearch.internal
+     */
     static final class SendFileResult {
         final List<String> phase1FileNames;
         final List<Long> phase1FileSizes;
@@ -842,6 +858,11 @@ public class RecoverySourceHandler {
         sender.start();
     }
 
+    /**
+     * An operation chunk request
+     *
+     * @opensearch.internal
+     */
     private static class OperationChunkRequest implements MultiChunkTransfer.ChunkRequest {
         final List<Translog.Operation> operations;
         final boolean lastChunk;
@@ -998,6 +1019,11 @@ public class RecoverySourceHandler {
         }, listener::onFailure);
     }
 
+    /**
+     * A result for a send snapshot
+     *
+     * @opensearch.internal
+     */
     static final class SendSnapshotResult {
         final long targetLocalCheckpoint;
         final int sentOperations;
@@ -1030,6 +1056,11 @@ public class RecoverySourceHandler {
             + '}';
     }
 
+    /**
+     * A file chunk from the recovery source
+     *
+     * @opensearch.internal
+     */
     private static class FileChunk implements MultiChunkTransfer.ChunkRequest, Releasable {
         final StoreFileMetadata md;
         final BytesReference content;

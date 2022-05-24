@@ -51,6 +51,7 @@ import org.opensearch.index.query.functionscore.FunctionScoreQueryBuilder;
 import org.opensearch.index.query.functionscore.FunctionScoreQueryBuilder.FilterFunctionBuilder;
 import org.opensearch.index.query.functionscore.ScoreFunctionBuilders;
 import org.opensearch.search.MultiValueMode;
+import org.opensearch.search.SearchHit;
 import org.opensearch.search.SearchHits;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.VersionUtils;
@@ -77,7 +78,9 @@ import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertNoFailures
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertOrderedSearchHits;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertSearchHits;
 import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.arrayWithSize;
 import static org.hamcrest.Matchers.closeTo;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThan;
@@ -93,17 +96,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testDistanceScoreGeoLinGaussExp() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("loc")
                     .field("type", "geo_point")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -220,17 +220,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testDistanceScoreGeoLinGaussExpWithOffset() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num")
                     .field("type", "double")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -334,17 +331,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
         Settings settings = Settings.builder().put(IndexMetadata.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), 1).build();
         assertAcked(
             prepareCreate("test").setSettings(settings)
-                .addMapping(
-                    "type1",
+                .setMapping(
                     jsonBuilder().startObject()
-                        .startObject("type1")
                         .startObject("properties")
                         .startObject("test")
                         .field("type", "text")
                         .endObject()
                         .startObject("loc")
                         .field("type", "geo_point")
-                        .endObject()
                         .endObject()
                         .endObject()
                         .endObject()
@@ -433,17 +427,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testParseGeoPoint() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("loc")
                     .field("type", "geo_point")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -501,17 +492,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testCombineModes() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num")
                     .field("type", "double")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -616,19 +604,83 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     }
 
+    public void testCombineModesExplain() throws Exception {
+        assertAcked(
+            prepareCreate("test").setMapping(
+                jsonBuilder().startObject()
+                    .startObject("properties")
+                    .startObject("test")
+                    .field("type", "text")
+                    .endObject()
+                    .startObject("num")
+                    .field("type", "double")
+                    .endObject()
+                    .endObject()
+                    .endObject()
+            )
+        );
+
+        client().prepareIndex()
+            .setId("1")
+            .setIndex("test")
+            .setRefreshPolicy(IMMEDIATE)
+            .setSource(jsonBuilder().startObject().field("test", "value value").field("num", 1.0).endObject())
+            .get();
+
+        FunctionScoreQueryBuilder baseQuery = functionScoreQuery(
+            constantScoreQuery(termQuery("test", "value")).queryName("query1"),
+            ScoreFunctionBuilders.weightFactorFunction(2, "weight1")
+        );
+        // decay score should return 0.5 for this function and baseQuery should return 2.0f as it's score
+        ActionFuture<SearchResponse> response = client().search(
+            searchRequest().searchType(SearchType.QUERY_THEN_FETCH)
+                .source(
+                    searchSource().explain(true)
+                        .query(
+                            functionScoreQuery(baseQuery, gaussDecayFunction("num", 0.0, 1.0, null, 0.5, "func2")).boostMode(
+                                CombineFunction.MULTIPLY
+                            )
+                        )
+                )
+        );
+        SearchResponse sr = response.actionGet();
+        SearchHits sh = sr.getHits();
+        assertThat(sh.getTotalHits().value, equalTo((long) (1)));
+        assertThat(sh.getAt(0).getId(), equalTo("1"));
+        assertThat(sh.getAt(0).getExplanation().getDetails(), arrayWithSize(2));
+        assertThat(sh.getAt(0).getExplanation().getDetails()[0].getDetails(), arrayWithSize(2));
+        // "description": "ConstantScore(test:value) (_name: query1)"
+        assertThat(
+            sh.getAt(0).getExplanation().getDetails()[0].getDetails()[0].getDescription(),
+            equalTo("ConstantScore(test:value) (_name: query1)")
+        );
+        assertThat(sh.getAt(0).getExplanation().getDetails()[0].getDetails()[1].getDetails(), arrayWithSize(2));
+        assertThat(sh.getAt(0).getExplanation().getDetails()[0].getDetails()[1].getDetails()[0].getDetails(), arrayWithSize(2));
+        // "description": "constant score 1.0(_name: func1) - no function provided"
+        assertThat(
+            sh.getAt(0).getExplanation().getDetails()[0].getDetails()[1].getDetails()[0].getDetails()[0].getDescription(),
+            equalTo("constant score 1.0(_name: weight1) - no function provided")
+        );
+        // "description": "exp(-0.5*pow(MIN[Math.max(Math.abs(1.0(=doc value) - 0.0(=origin))) - 0.0(=offset), 0)],2.0)/0.7213475204444817,
+        // _name: func2)"
+        assertThat(sh.getAt(0).getExplanation().getDetails()[1].getDetails(), arrayWithSize(2));
+        assertThat(sh.getAt(0).getExplanation().getDetails()[1].getDetails()[0].getDetails(), arrayWithSize(1));
+        assertThat(
+            sh.getAt(0).getExplanation().getDetails()[1].getDetails()[0].getDetails()[0].getDescription(),
+            containsString("_name: func2")
+        );
+    }
+
     public void testExceptionThrownIfScaleLE0() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num1")
                     .field("type", "date")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -658,10 +710,8 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testParseDateMath() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
@@ -669,7 +719,6 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
                     .startObject("num1")
                     .field("type", "date")
                     .field("format", "epoch_millis")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -712,10 +761,8 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testValueMissingLin() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
@@ -725,7 +772,6 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
                     .endObject()
                     .startObject("num2")
                     .field("type", "double")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -781,17 +827,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
         ZonedDateTime dt = ZonedDateTime.now(ZoneOffset.UTC);
 
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num1")
                     .field("type", "date")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -860,7 +903,6 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
         Version version = VersionUtils.randomIndexCompatibleVersion(random());
         Settings settings = Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, version).build();
         XContentBuilder xContentBuilder = jsonBuilder().startObject()
-            .startObject("type")
             .startObject("properties")
             .startObject("test")
             .field("type", "text")
@@ -876,8 +918,8 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
             .startObject("geo")
             .field("type", "geo_point")
             .field("ignore_malformed", true);
-        xContentBuilder.endObject().endObject().endObject().endObject();
-        assertAcked(prepareCreate("test").setSettings(settings).addMapping("type", xContentBuilder));
+        xContentBuilder.endObject().endObject().endObject();
+        assertAcked(prepareCreate("test").setSettings(settings).setMapping(xContentBuilder));
         int numDocs = 200;
         List<IndexRequestBuilder> indexBuilders = new ArrayList<>();
 
@@ -940,17 +982,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testParsingExceptionIfFieldDoesNotExist() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("geo")
                     .field("type", "geo_point")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -993,17 +1032,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testParsingExceptionIfFieldTypeDoesNotMatch() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num")
                     .field("type", "text")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -1032,17 +1068,14 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testNoQueryGiven() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
                     .endObject()
                     .startObject("num")
                     .field("type", "double")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -1065,10 +1098,8 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
 
     public void testMultiFieldOptions() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "type1",
+            prepareCreate("test").setMapping(
                 jsonBuilder().startObject()
-                    .startObject("type1")
                     .startObject("properties")
                     .startObject("test")
                     .field("type", "text")
@@ -1078,7 +1109,6 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
                     .endObject()
                     .startObject("num")
                     .field("type", "float")
-                    .endObject()
                     .endObject()
                     .endObject()
                     .endObject()
@@ -1194,5 +1224,130 @@ public class DecayFunctionScoreIT extends OpenSearchIntegTestCase {
         assertSearchHits(sr, "1", "2");
         sh = sr.getHits();
         assertThat((double) (sh.getAt(0).getScore()), closeTo((sh.getAt(1).getScore()), 1.e-6d));
+    }
+
+    public void testDistanceScoreGeoLinGaussExplain() throws Exception {
+        assertAcked(
+            prepareCreate("test").setMapping(
+                jsonBuilder().startObject()
+                    .startObject("properties")
+                    .startObject("test")
+                    .field("type", "text")
+                    .endObject()
+                    .startObject("loc")
+                    .field("type", "geo_point")
+                    .endObject()
+                    .endObject()
+                    .endObject()
+            )
+        );
+
+        List<IndexRequestBuilder> indexBuilders = new ArrayList<>();
+        indexBuilders.add(
+            client().prepareIndex()
+                .setId("1")
+                .setIndex("test")
+                .setSource(
+                    jsonBuilder().startObject()
+                        .field("test", "value")
+                        .startObject("loc")
+                        .field("lat", 10)
+                        .field("lon", 20)
+                        .endObject()
+                        .endObject()
+                )
+        );
+        indexBuilders.add(
+            client().prepareIndex()
+                .setId("2")
+                .setIndex("test")
+                .setSource(
+                    jsonBuilder().startObject()
+                        .field("test", "value")
+                        .startObject("loc")
+                        .field("lat", 11)
+                        .field("lon", 22)
+                        .endObject()
+                        .endObject()
+                )
+        );
+
+        indexRandom(true, indexBuilders);
+
+        // Test Gauss
+        List<Float> lonlat = new ArrayList<>();
+        lonlat.add(20f);
+        lonlat.add(11f);
+
+        final String queryName = "query1";
+        final String functionName = "func1";
+        ActionFuture<SearchResponse> response = client().search(
+            searchRequest().searchType(SearchType.QUERY_THEN_FETCH)
+                .source(
+                    searchSource().explain(true)
+                        .query(
+                            functionScoreQuery(baseQuery.queryName(queryName), gaussDecayFunction("loc", lonlat, "1000km", functionName))
+                        )
+                )
+        );
+        SearchResponse sr = response.actionGet();
+        SearchHits sh = sr.getHits();
+        assertThat(sh.getTotalHits().value, equalTo(2L));
+        assertThat(sh.getAt(0).getId(), equalTo("1"));
+        assertThat(sh.getAt(1).getId(), equalTo("2"));
+        assertExplain(queryName, functionName, sr);
+
+        response = client().search(
+            searchRequest().searchType(SearchType.QUERY_THEN_FETCH)
+                .source(
+                    searchSource().explain(true)
+                        .query(
+                            functionScoreQuery(baseQuery.queryName(queryName), linearDecayFunction("loc", lonlat, "1000km", functionName))
+                        )
+                )
+        );
+
+        sr = response.actionGet();
+        sh = sr.getHits();
+        assertThat(sh.getTotalHits().value, equalTo(2L));
+        assertThat(sh.getAt(0).getId(), equalTo("1"));
+        assertThat(sh.getAt(1).getId(), equalTo("2"));
+        assertExplain(queryName, functionName, sr);
+
+        response = client().search(
+            searchRequest().searchType(SearchType.QUERY_THEN_FETCH)
+                .source(
+                    searchSource().explain(true)
+                        .query(
+                            functionScoreQuery(
+                                baseQuery.queryName(queryName),
+                                exponentialDecayFunction("loc", lonlat, "1000km", functionName)
+                            )
+                        )
+                )
+        );
+
+        sr = response.actionGet();
+        sh = sr.getHits();
+        assertThat(sh.getTotalHits().value, equalTo(2L));
+        assertThat(sh.getAt(0).getId(), equalTo("1"));
+        assertThat(sh.getAt(1).getId(), equalTo("2"));
+        assertExplain(queryName, functionName, sr);
+    }
+
+    private void assertExplain(final String queryName, final String functionName, SearchResponse sr) {
+        SearchHit firstHit = sr.getHits().getAt(0);
+        assertThat(firstHit.getExplanation().getDetails(), arrayWithSize(2));
+        // "description": "*:* (_name: query1)"
+        assertThat(firstHit.getExplanation().getDetails()[0].getDescription().toString(), containsString("_name: " + queryName));
+        assertThat(firstHit.getExplanation().getDetails()[1].getDetails(), arrayWithSize(2));
+        // "description": "random score function (seed: 12345678, field: _seq_no, _name: func1)"
+        assertThat(firstHit.getExplanation().getDetails()[1].getDetails()[0].getDetails(), arrayWithSize(1));
+        // "description": "exp(-0.5*pow(MIN of: [Math.max(arcDistance(10.999999972991645, 21.99999994598329(=doc value),11.0, 20.0(=origin))
+        // - 0.0(=offset), 0)],2.0)/7.213475204444817E11, _name: func1)"
+        assertThat(
+            firstHit.getExplanation().getDetails()[1].getDetails()[0].getDetails()[0].getDescription().toString(),
+            containsString("_name: " + functionName)
+        );
     }
 }

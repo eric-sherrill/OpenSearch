@@ -41,6 +41,7 @@ import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.NoMergePolicy;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.opensearch.ExceptionsHelper;
+import org.opensearch.OpenSearchException;
 import org.opensearch.action.ActionListener;
 import org.opensearch.action.admin.indices.flush.FlushRequest;
 import org.opensearch.action.bulk.BulkShardRequest;
@@ -68,6 +69,8 @@ import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.SnapshotMatchers;
 import org.opensearch.index.translog.Translog;
+import org.opensearch.indices.replication.common.ReplicationListener;
+import org.opensearch.indices.replication.common.ReplicationState;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -161,7 +164,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
 
             // delete #1
             orgReplica.advanceMaxSeqNoOfUpdatesOrDeletes(1); // manually advance msu for this delete
-            orgReplica.applyDeleteOperationOnReplica(1, primaryTerm, 2, "type", "id");
+            orgReplica.applyDeleteOperationOnReplica(1, primaryTerm, 2, "id");
             orgReplica.flush(new FlushRequest().force(true)); // isolate delete#1 in its own translog generation and lucene segment
             // index #0
             orgReplica.applyIndexOperationOnReplica(
@@ -170,7 +173,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
                 1,
                 IndexRequest.UNSET_AUTO_GENERATED_TIMESTAMP,
                 false,
-                new SourceToParse(indexName, "type", "id", new BytesArray("{}"), XContentType.JSON)
+                new SourceToParse(indexName, "id", new BytesArray("{}"), XContentType.JSON)
             );
             // index #3
             orgReplica.applyIndexOperationOnReplica(
@@ -179,7 +182,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
                 1,
                 IndexRequest.UNSET_AUTO_GENERATED_TIMESTAMP,
                 false,
-                new SourceToParse(indexName, "type", "id-3", new BytesArray("{}"), XContentType.JSON)
+                new SourceToParse(indexName, "id-3", new BytesArray("{}"), XContentType.JSON)
             );
             // Flushing a new commit with local checkpoint=1 allows to delete the translog gen #1.
             orgReplica.flush(new FlushRequest().force(true).waitIfOngoing(true));
@@ -190,7 +193,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
                 1,
                 IndexRequest.UNSET_AUTO_GENERATED_TIMESTAMP,
                 false,
-                new SourceToParse(indexName, "type", "id-2", new BytesArray("{}"), XContentType.JSON)
+                new SourceToParse(indexName, "id-2", new BytesArray("{}"), XContentType.JSON)
             );
             orgReplica.sync(); // advance local checkpoint
             orgReplica.updateGlobalCheckpointOnReplica(3L, "test");
@@ -201,7 +204,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
                 1,
                 IndexRequest.UNSET_AUTO_GENERATED_TIMESTAMP,
                 false,
-                new SourceToParse(indexName, "type", "id-5", new BytesArray("{}"), XContentType.JSON)
+                new SourceToParse(indexName, "id-5", new BytesArray("{}"), XContentType.JSON)
             );
 
             if (randomBoolean()) {
@@ -225,7 +228,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
             IndexShard newReplica = shards.addReplicaWithExistingPath(orgPrimary.shardPath(), orgPrimary.routingEntry().currentNodeId());
             shards.recoverReplica(newReplica);
             shards.assertAllEqual(3);
-            try (Translog.Snapshot snapshot = newReplica.newChangesSnapshot("test", 0, Long.MAX_VALUE, false)) {
+            try (Translog.Snapshot snapshot = newReplica.newChangesSnapshot("test", 0, Long.MAX_VALUE, false, randomBoolean())) {
                 assertThat(snapshot, SnapshotMatchers.size(6));
             }
         }
@@ -310,13 +313,7 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
             Engine.IndexResult result = primaryShard.applyIndexOperationOnPrimary(
                 Versions.MATCH_ANY,
                 VersionType.INTERNAL,
-                new SourceToParse(
-                    primaryShard.shardId().getIndexName(),
-                    "_doc",
-                    Integer.toString(i),
-                    new BytesArray("{}"),
-                    XContentType.JSON
-                ),
+                new SourceToParse(primaryShard.shardId().getIndexName(), Integer.toString(i), new BytesArray("{}"), XContentType.JSON),
                 SequenceNumbers.UNASSIGNED_SEQ_NO,
                 0,
                 IndexRequest.UNSET_AUTO_GENERATED_TIMESTAMP,
@@ -454,20 +451,17 @@ public class RecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
             IndexShard replica = group.addReplica();
             expectThrows(
                 Exception.class,
-                () -> group.recoverReplica(
-                    replica,
-                    (shard, sourceNode) -> new RecoveryTarget(shard, sourceNode, new PeerRecoveryTargetService.RecoveryListener() {
-                        @Override
-                        public void onRecoveryDone(RecoveryState state) {
-                            throw new AssertionError("recovery must fail");
-                        }
+                () -> group.recoverReplica(replica, (shard, sourceNode) -> new RecoveryTarget(shard, sourceNode, new ReplicationListener() {
+                    @Override
+                    public void onDone(ReplicationState state) {
+                        throw new AssertionError("recovery must fail");
+                    }
 
-                        @Override
-                        public void onRecoveryFailure(RecoveryState state, RecoveryFailedException e, boolean sendShardFailure) {
-                            assertThat(ExceptionsHelper.unwrap(e, IOException.class).getMessage(), equalTo("simulated"));
-                        }
-                    })
-                )
+                    @Override
+                    public void onFailure(ReplicationState state, OpenSearchException e, boolean sendShardFailure) {
+                        assertThat(ExceptionsHelper.unwrap(e, IOException.class).getMessage(), equalTo("simulated"));
+                    }
+                }))
             );
             expectThrows(AlreadyClosedException.class, () -> replica.refresh("test"));
             group.removeReplica(replica);

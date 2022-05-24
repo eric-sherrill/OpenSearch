@@ -52,19 +52,18 @@ import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.index.IndexService;
 import org.opensearch.index.mapper.MapperParsingException;
+import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.query.RangeQueryBuilder;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.test.OpenSearchIntegTestCase;
 import org.opensearch.test.OpenSearchIntegTestCase.ClusterScope;
 import org.opensearch.test.OpenSearchIntegTestCase.Scope;
 
-import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_WAIT_FOR_ACTIVE_SHARDS;
-import static org.opensearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertBlocked;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertRequestBuilderThrows;
@@ -109,32 +108,9 @@ public class CreateIndexIT extends OpenSearchIntegTestCase {
         assertThat(index.getCreationDate(), allOf(lessThanOrEqualTo(timeAfterRequest), greaterThanOrEqualTo(timeBeforeRequest)));
     }
 
-    public void testDoubleAddMapping() throws Exception {
-        try {
-            prepareCreate("test").addMapping("type1", "date", "type=date").addMapping("type1", "num", "type=integer");
-            fail("did not hit expected exception");
-        } catch (IllegalStateException ise) {
-            // expected
-        }
-        try {
-            prepareCreate("test").addMapping("type1", new HashMap<String, Object>()).addMapping("type1", new HashMap<String, Object>());
-            fail("did not hit expected exception");
-        } catch (IllegalStateException ise) {
-            // expected
-        }
-        try {
-            prepareCreate("test").addMapping("type1", jsonBuilder().startObject().endObject())
-                .addMapping("type1", jsonBuilder().startObject().endObject());
-            fail("did not hit expected exception");
-        } catch (IllegalStateException ise) {
-            // expected
-        }
-    }
-
     public void testNonNestedMappings() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "_doc",
+            prepareCreate("test").setMapping(
                 XContentFactory.jsonBuilder()
                     .startObject()
                     .startObject("properties")
@@ -148,54 +124,46 @@ public class CreateIndexIT extends OpenSearchIntegTestCase {
 
         GetMappingsResponse response = client().admin().indices().prepareGetMappings("test").get();
 
-        ImmutableOpenMap<String, MappingMetadata> mappings = response.mappings().get("test");
+        MappingMetadata mappings = response.mappings().get("test");
         assertNotNull(mappings);
-
-        MappingMetadata metadata = mappings.get("_doc");
-        assertNotNull(metadata);
-        assertFalse(metadata.sourceAsMap().isEmpty());
+        assertFalse(mappings.sourceAsMap().isEmpty());
     }
 
     public void testEmptyNestedMappings() throws Exception {
-        assertAcked(prepareCreate("test").addMapping("_doc", XContentFactory.jsonBuilder().startObject().endObject()));
+        assertAcked(prepareCreate("test").setMapping(XContentFactory.jsonBuilder().startObject().endObject()));
 
         GetMappingsResponse response = client().admin().indices().prepareGetMappings("test").get();
 
-        ImmutableOpenMap<String, MappingMetadata> mappings = response.mappings().get("test");
+        MappingMetadata mappings = response.mappings().get("test");
         assertNotNull(mappings);
 
-        MappingMetadata metadata = mappings.get("_doc");
-        assertNotNull(metadata);
-        assertTrue(metadata.sourceAsMap().isEmpty());
+        assertTrue(mappings.sourceAsMap().isEmpty());
     }
 
     public void testMappingParamAndNestedMismatch() throws Exception {
         MapperParsingException e = expectThrows(
             MapperParsingException.class,
-            () -> prepareCreate("test").addMapping(
-                "type1",
-                XContentFactory.jsonBuilder().startObject().startObject("type2").endObject().endObject()
-            ).get()
+            () -> prepareCreate("test").setMapping(XContentFactory.jsonBuilder().startObject().startObject("type2").endObject().endObject())
+                .get()
         );
-        assertThat(e.getMessage(), startsWith("Failed to parse mapping [type1]: Root mapping definition has unsupported parameters"));
+        assertThat(
+            e.getMessage(),
+            startsWith(
+                "Failed to parse mapping [" + MapperService.SINGLE_MAPPING_NAME + "]: Root mapping definition has unsupported parameters"
+            )
+        );
     }
 
     public void testEmptyMappings() throws Exception {
         assertAcked(
-            prepareCreate("test").addMapping(
-                "_doc",
-                XContentFactory.jsonBuilder().startObject().startObject("_doc").endObject().endObject()
-            )
+            prepareCreate("test").setMapping(XContentFactory.jsonBuilder().startObject().startObject("_doc").endObject().endObject())
         );
 
         GetMappingsResponse response = client().admin().indices().prepareGetMappings("test").get();
 
-        ImmutableOpenMap<String, MappingMetadata> mappings = response.mappings().get("test");
+        MappingMetadata mappings = response.mappings().get("test");
         assertNotNull(mappings);
-
-        MappingMetadata metadata = mappings.get("_doc");
-        assertNotNull(metadata);
-        assertTrue(metadata.sourceAsMap().isEmpty());
+        assertTrue(mappings.sourceAsMap().isEmpty());
     }
 
     public void testInvalidShardCountSettings() throws Exception {

@@ -65,6 +65,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Syncer for Primary replica
+ *
+ * @opensearch.internal
+ */
 public class PrimaryReplicaSyncer {
 
     private static final Logger logger = LogManager.getLogger(PrimaryReplicaSyncer.class);
@@ -104,7 +109,7 @@ public class PrimaryReplicaSyncer {
             // Wrap translog snapshot to make it synchronized as it is accessed by different threads through SnapshotSender.
             // Even though those calls are not concurrent, snapshot.next() uses non-synchronized state and is not multi-thread-compatible
             // Also fail the resync early if the shard is shutting down
-            snapshot = indexShard.newChangesSnapshot("resync", startingSeqNo, Long.MAX_VALUE, false);
+            snapshot = indexShard.newChangesSnapshot("resync", startingSeqNo, Long.MAX_VALUE, false, true);
             final Translog.Snapshot originalSnapshot = snapshot;
             final Translog.Snapshot wrappedSnapshot = new Translog.Snapshot() {
                 @Override
@@ -220,6 +225,11 @@ public class PrimaryReplicaSyncer {
         }
     }
 
+    /**
+     * Synchronous action
+     *
+     * @opensearch.internal
+     */
     public interface SyncAction {
         void sync(
             ResyncReplicationRequest request,
@@ -230,6 +240,11 @@ public class PrimaryReplicaSyncer {
         );
     }
 
+    /**
+     * Sends a snapshot
+     *
+     * @opensearch.internal
+     */
     static class SnapshotSender extends AbstractRunnable implements ActionListener<ResyncReplicationResponse> {
         private final Logger logger;
         private final SyncAction syncAction;
@@ -343,6 +358,11 @@ public class PrimaryReplicaSyncer {
         }
     }
 
+    /**
+     * Request to resync primary and replica
+     *
+     * @opensearch.internal
+     */
     public static class ResyncRequest extends ActionRequest {
 
         private final ShardId shardId;
@@ -374,6 +394,11 @@ public class PrimaryReplicaSyncer {
         }
     }
 
+    /**
+     * Task to resync primary and replica
+     *
+     * @opensearch.internal
+     */
     public static class ResyncTask extends Task {
         private volatile String phase = "starting";
         private volatile int totalOperations;
@@ -436,6 +461,11 @@ public class PrimaryReplicaSyncer {
             return new ResyncTask.Status(phase, totalOperations, resyncedOperations, skippedOperations);
         }
 
+        /**
+         * Status for primary replica syncer
+         *
+         * @opensearch.internal
+         */
         public static class Status implements Task.Status {
             public static final String NAME = "resync";
 

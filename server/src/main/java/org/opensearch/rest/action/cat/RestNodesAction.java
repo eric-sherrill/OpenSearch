@@ -82,6 +82,11 @@ import java.util.stream.Collectors;
 import static java.util.Collections.singletonList;
 import static org.opensearch.rest.RestRequest.Method.GET;
 
+/**
+ * _cat API action to get node information
+ *
+ * @opensearch.api
+ */
 public class RestNodesAction extends AbstractCatAction {
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(RestNodesAction.class);
     static final String LOCAL_DEPRECATED_MESSAGE = "Deprecated parameter [local] used. This parameter does not cause this API to act "
@@ -110,7 +115,8 @@ public class RestNodesAction extends AbstractCatAction {
             deprecationLogger.deprecate("cat_nodes_local_parameter", LOCAL_DEPRECATED_MESSAGE);
         }
         clusterStateRequest.local(request.paramAsBoolean("local", clusterStateRequest.local()));
-        clusterStateRequest.masterNodeTimeout(request.paramAsTime("master_timeout", clusterStateRequest.masterNodeTimeout()));
+        clusterStateRequest.masterNodeTimeout(request.paramAsTime("cluster_manager_timeout", clusterStateRequest.masterNodeTimeout()));
+        parseDeprecatedMasterTimeoutParameter(clusterStateRequest, request, deprecationLogger, getName());
         final boolean fullId = request.paramAsBoolean("full_id", false);
         return channel -> client.admin().cluster().state(clusterStateRequest, new RestActionListener<ClusterStateResponse>(channel) {
             @Override
@@ -193,7 +199,8 @@ public class RestNodesAction extends AbstractCatAction {
             "node.role",
             "alias:r,role,nodeRole;desc:m:master eligible node, d:data node, i:ingest node, -:coordinating node only"
         );
-        table.addCell("master", "alias:m;desc:*:current master");
+        // TODO: Remove the header alias 'master', after removing MASTER_ROLE. It's added for compatibility when using parameter 'h=master'.
+        table.addCell("cluster_manager", "alias:cm,m,master;desc:*:current cluster manager");
         table.addCell("name", "alias:n;desc:node name");
 
         table.addCell("completion.size", "alias:cs,completionSize;default:false;text-align:right;desc:size of completion");
@@ -332,7 +339,7 @@ public class RestNodesAction extends AbstractCatAction {
     ) {
 
         DiscoveryNodes nodes = state.getState().nodes();
-        String masterId = nodes.getMasterNodeId();
+        String clusterManagerId = nodes.getMasterNodeId();
         Table table = getTableWithHeader(req);
 
         for (DiscoveryNode node : nodes) {
@@ -422,7 +429,7 @@ public class RestNodesAction extends AbstractCatAction {
                 roles = node.getRoles().stream().map(DiscoveryNodeRole::roleNameAbbreviation).sorted().collect(Collectors.joining());
             }
             table.addCell(roles);
-            table.addCell(masterId == null ? "x" : masterId.equals(node.getId()) ? "*" : "-");
+            table.addCell(clusterManagerId == null ? "x" : clusterManagerId.equals(node.getId()) ? "*" : "-");
             table.addCell(node.getName());
 
             CompletionStats completionStats = indicesStats == null ? null : stats.getIndices().getCompletion();

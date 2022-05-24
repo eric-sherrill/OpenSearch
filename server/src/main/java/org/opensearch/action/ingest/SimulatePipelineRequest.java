@@ -55,6 +55,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+/**
+ * transport request to simulate a pipeline
+ *
+ * @opensearch.internal
+ */
 public class SimulatePipelineRequest extends ActionRequest implements ToXContentObject {
 
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(SimulatePipelineRequest.class);
@@ -125,6 +130,11 @@ public class SimulatePipelineRequest extends ActionRequest implements ToXContent
         return builder;
     }
 
+    /**
+     * Fields for parsing and toXContent
+     *
+     * @opensearch.internal
+     */
     public static final class Fields {
         static final String PIPELINE = "pipeline";
         static final String DOCS = "docs";
@@ -194,12 +204,6 @@ public class SimulatePipelineRequest extends ActionRequest implements ToXContent
             Map<String, Object> dataMap = (Map<String, Object>) object;
             Map<String, Object> document = ConfigurationUtils.readMap(null, null, dataMap, Fields.SOURCE);
             String index = ConfigurationUtils.readStringOrIntProperty(null, null, dataMap, Metadata.INDEX.getFieldName(), "_index");
-            if (dataMap.containsKey(Metadata.TYPE.getFieldName())) {
-                deprecationLogger.deprecate(
-                    "simulate_pipeline_with_types",
-                    "[types removal] specifying _type in pipeline simulation requests is deprecated"
-                );
-            }
             String id = ConfigurationUtils.readStringOrIntProperty(null, null, dataMap, Metadata.ID.getFieldName(), "_id");
             String routing = ConfigurationUtils.readOptionalStringOrIntProperty(null, null, dataMap, Metadata.ROUTING.getFieldName());
             Long version = null;

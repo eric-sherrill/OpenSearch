@@ -97,6 +97,8 @@ import static org.opensearch.indices.cluster.IndicesClusterStateService.Allocate
 
 /**
  * Service responsible for submitting index templates updates
+ *
+ * @opensearch.internal
  */
 public class MetadataIndexTemplateService {
 
@@ -915,11 +917,11 @@ public class MetadataIndexTemplateService {
         templateBuilder.patterns(request.indexPatterns);
         templateBuilder.settings(request.settings);
 
-        for (Map.Entry<String, String> entry : request.mappings.entrySet()) {
+        if (request.mappings != null) {
             try {
-                templateBuilder.putMapping(entry.getKey(), entry.getValue());
+                templateBuilder.putMapping(MapperService.SINGLE_MAPPING_NAME, request.mappings);
             } catch (Exception e) {
-                throw new MapperParsingException("Failed to parse mapping [{}]: {}", e, entry.getKey(), e.getMessage());
+                throw new MapperParsingException("Failed to parse mapping: {}", e, request.mappings);
             }
         }
 
@@ -932,6 +934,11 @@ public class MetadataIndexTemplateService {
             templateBuilder.putAlias(aliasMetadata);
         }
         IndexTemplateMetadata template = templateBuilder.build();
+        IndexTemplateMetadata existingTemplate = currentState.metadata().templates().get(request.name);
+        if (template.equals(existingTemplate)) {
+            // The template is unchanged, therefore there is no need for a cluster state update
+            return currentState;
+        }
 
         Metadata.Builder builder = Metadata.builder(currentState.metadata()).put(template);
 
@@ -1491,6 +1498,11 @@ public class MetadataIndexTemplateService {
         }
     }
 
+    /**
+     * Listener for putting metadata in the template
+     *
+     * @opensearch.internal
+     */
     public interface PutListener {
 
         void onResponse(PutResponse response);
@@ -1498,6 +1510,11 @@ public class MetadataIndexTemplateService {
         void onFailure(Exception e);
     }
 
+    /**
+     * A PUT request.
+     *
+     * @opensearch.internal
+     */
     public static class PutRequest {
         final String name;
         final String cause;
@@ -1506,7 +1523,7 @@ public class MetadataIndexTemplateService {
         Integer version;
         List<String> indexPatterns;
         Settings settings = Settings.Builder.EMPTY_SETTINGS;
-        Map<String, String> mappings = new HashMap<>();
+        String mappings = null;
         List<Alias> aliases = new ArrayList<>();
 
         TimeValue masterTimeout = MasterNodeRequest.DEFAULT_MASTER_NODE_TIMEOUT;
@@ -1536,18 +1553,13 @@ public class MetadataIndexTemplateService {
             return this;
         }
 
-        public PutRequest mappings(Map<String, String> mappings) {
-            this.mappings.putAll(mappings);
+        public PutRequest mappings(String mappings) {
+            this.mappings = mappings;
             return this;
         }
 
         public PutRequest aliases(Set<Alias> aliases) {
             this.aliases.addAll(aliases);
-            return this;
-        }
-
-        public PutRequest putMapping(String mappingType, String mappingSource) {
-            mappings.put(mappingType, mappingSource);
             return this;
         }
 
@@ -1562,6 +1574,11 @@ public class MetadataIndexTemplateService {
         }
     }
 
+    /**
+     * The PUT response.
+     *
+     * @opensearch.internal
+     */
     public static class PutResponse {
         private final boolean acknowledged;
 
@@ -1574,6 +1591,11 @@ public class MetadataIndexTemplateService {
         }
     }
 
+    /**
+     * A remove Request.
+     *
+     * @opensearch.internal
+     */
     public static class RemoveRequest {
         final String name;
         TimeValue masterTimeout = MasterNodeRequest.DEFAULT_MASTER_NODE_TIMEOUT;
@@ -1588,6 +1610,11 @@ public class MetadataIndexTemplateService {
         }
     }
 
+    /**
+     * A remove Response.
+     *
+     * @opensearch.internal
+     */
     public static class RemoveResponse {
         private final boolean acknowledged;
 
@@ -1600,6 +1627,11 @@ public class MetadataIndexTemplateService {
         }
     }
 
+    /**
+     * A remove listener.
+     *
+     * @opensearch.internal
+     */
     public interface RemoveListener {
 
         void onResponse(RemoveResponse response);

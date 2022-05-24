@@ -38,6 +38,8 @@ import org.apache.lucene.index.PrefixCodedTerms;
 import org.apache.lucene.index.PrefixCodedTerms.TermIterator;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.intervals.IntervalsSource;
+import org.apache.lucene.queries.spans.SpanMultiTermQueryWrapper;
+import org.apache.lucene.queries.spans.SpanQuery;
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
@@ -48,8 +50,6 @@ import org.apache.lucene.search.NormsFieldExistsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermInSetQuery;
 import org.apache.lucene.search.TermQuery;
-import org.apache.lucene.search.spans.SpanMultiTermQueryWrapper;
-import org.apache.lucene.search.spans.SpanQuery;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.common.Nullable;
@@ -77,6 +77,8 @@ import java.util.function.Supplier;
 
 /**
  * This defines the core properties and functions to operate on a field.
+ *
+ * @opensearch.internal
  */
 public abstract class MappedFieldType {
 
@@ -376,6 +378,8 @@ public abstract class MappedFieldType {
     /**
      * An enum used to describe the relation between the range of terms in a
      * shard when compared with a query range
+     *
+     * @opensearch.internal
      */
     public enum Relation {
         WITHIN,

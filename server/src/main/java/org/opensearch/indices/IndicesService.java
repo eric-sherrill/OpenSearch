@@ -136,6 +136,7 @@ import org.opensearch.indices.cluster.IndicesClusterStateService;
 import org.opensearch.indices.fielddata.cache.IndicesFieldDataCache;
 import org.opensearch.indices.mapper.MapperRegistry;
 import org.opensearch.indices.recovery.PeerRecoveryTargetService;
+import org.opensearch.indices.recovery.RecoveryListener;
 import org.opensearch.indices.recovery.RecoveryState;
 import org.opensearch.node.Node;
 import org.opensearch.plugins.IndexStorePlugin;
@@ -189,6 +190,11 @@ import static org.opensearch.index.IndexService.IndexCreationContext.METADATA_VE
 import static org.opensearch.index.query.AbstractQueryBuilder.parseInnerQueryBuilder;
 import static org.opensearch.search.SearchService.ALLOW_EXPENSIVE_QUERIES;
 
+/**
+ * Main OpenSearch indices service
+ *
+ * @opensearch.internal
+ */
 public class IndicesService extends AbstractLifecycleComponent
     implements
         IndicesClusterStateService.AllocatedIndices<IndexShard, IndexService>,
@@ -834,7 +840,7 @@ public class IndicesService extends AbstractLifecycleComponent
     public IndexShard createShard(
         final ShardRouting shardRouting,
         final PeerRecoveryTargetService recoveryTargetService,
-        final PeerRecoveryTargetService.RecoveryListener recoveryListener,
+        final RecoveryListener recoveryListener,
         final RepositoriesService repositoriesService,
         final Consumer<IndexShard.ShardFailure> onShardFailure,
         final Consumer<ShardId> globalCheckpointSyncer,
@@ -849,14 +855,13 @@ public class IndicesService extends AbstractLifecycleComponent
         RecoveryState recoveryState = indexService.createRecoveryState(shardRouting, targetNode, sourceNode);
         IndexShard indexShard = indexService.createShard(shardRouting, globalCheckpointSyncer, retentionLeaseSyncer);
         indexShard.addShardFailureCallback(onShardFailure);
-        indexShard.startRecovery(recoveryState, recoveryTargetService, recoveryListener, repositoriesService, (type, mapping) -> {
+        indexShard.startRecovery(recoveryState, recoveryTargetService, recoveryListener, repositoriesService, mapping -> {
             assert recoveryState.getRecoverySource().getType() == RecoverySource.Type.LOCAL_SHARDS
                 : "mapping update consumer only required by local shards recovery";
             client.admin()
                 .indices()
                 .preparePutMapping()
                 .setConcreteIndex(shardRouting.index()) // concrete index - no name clash, it uses uuid
-                .setType(type)
                 .setSource(mapping.source().string(), XContentType.JSON)
                 .get();
         }, this);
@@ -909,6 +914,11 @@ public class IndicesService extends AbstractLifecycleComponent
         return indicesQueryCache;
     }
 
+    /**
+     * Statistics for old shards
+     *
+     * @opensearch.internal
+     */
     static class OldShardsStats implements IndexEventListener {
 
         final SearchStats searchStats = new SearchStats();
@@ -1232,6 +1242,11 @@ public class IndicesService extends AbstractLifecycleComponent
         }
     }
 
+    /**
+     * A pending delete
+     *
+     * @opensearch.internal
+     */
     private static final class PendingDelete implements Comparable<PendingDelete> {
         final Index index;
         final int shardId;
@@ -1382,6 +1397,8 @@ public class IndicesService extends AbstractLifecycleComponent
      * periodically. In this case it is the field data cache, because a cache that
      * has an entry invalidated may not clean up the entry if it is not read from
      * or written to after invalidation.
+     *
+     * @opensearch.internal
      */
     private static final class CacheCleaner implements Runnable, Releasable {
 
@@ -1570,6 +1587,11 @@ public class IndicesService extends AbstractLifecycleComponent
         return indicesRequestCache.getOrCompute(cacheEntity, supplier, reader, cacheKey);
     }
 
+    /**
+     * An item in the index shard cache
+     *
+     * @opensearch.internal
+     */
     static final class IndexShardCacheEntity extends AbstractIndexShardCacheEntity {
         private static final long BASE_RAM_BYTES_USED = RamUsageEstimator.shallowSizeOfInstance(IndexShardCacheEntity.class);
         private final IndexShard indexShard;
@@ -1633,7 +1655,21 @@ public class IndicesService extends AbstractLifecycleComponent
      * Returns a new {@link QueryRewriteContext} with the given {@code now} provider
      */
     public QueryRewriteContext getRewriteContext(LongSupplier nowInMillis) {
-        return new QueryRewriteContext(xContentRegistry, namedWriteableRegistry, client, nowInMillis);
+        return getRewriteContext(nowInMillis, false);
+    }
+
+    /**
+     * Returns a new {@link QueryRewriteContext} for query validation with the given {@code now} provider
+     */
+    public QueryRewriteContext getValidationRewriteContext(LongSupplier nowInMillis) {
+        return getRewriteContext(nowInMillis, true);
+    }
+
+    /**
+     * Returns a new {@link QueryRewriteContext} with the given {@code now} provider
+     */
+    private QueryRewriteContext getRewriteContext(LongSupplier nowInMillis, boolean validate) {
+        return new QueryRewriteContext(xContentRegistry, namedWriteableRegistry, client, nowInMillis, validate);
     }
 
     /**
